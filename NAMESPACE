@@ -2,6 +2,9 @@
 
 export(CFPcalculationRCPP)
 export(CompoECOLEouA17)
+export(Construct_Tree)
+export(Contribution_Node)
+export(Contribution_SubTree)
 export(GereInfNA)
 export(Mult2_rcpp3)
 export(inversion_rcpp3)

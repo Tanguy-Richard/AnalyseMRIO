@@ -54,8 +54,10 @@ Contribution_SubTree <- function(f,A,Y,Z){
   tau <- length(Z)
   node_z <- Y[Z[1],]
 
-  for (t in 2:tau){
-    node_z <- node_z*A[Z[t],Z[t-1]]
+  if(tau>1){
+    for (t in 2:tau){
+      node_z <- node_z*A[Z[t],Z[t-1]]
+    }
   }
 
   y_Z <- as.matrix(node_z * as.integer(row.names(Y) == Z[tau]))

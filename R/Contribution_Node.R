@@ -15,8 +15,10 @@
 #'
 #' data(BASE_ECOLE)
 #'
-#' # Pour avoir la matrice de Leontief :
+#' # Séparation en composante du MRIO :
 #' MRIO_1990_ALL<-CompoECOLEouA17(BASE_ECOLE,"OptFullOptionsBonus",date=1990)
+#'
+#' # Pour avoir la matrice de Leontief :
 #' A <- MRIO_1990_ALL[["A_tab"]][,-1] # On enlève la colonne année
 #' noms <- paste(A$Lig_Country, A$Lig_Indus, sep="_") #On nomme les lignes
 #' A <- as.matrix(A[,-c(1,2)]) # On ne garde que la matrice qui nous interesse
@@ -45,11 +47,11 @@
 Contribution_Node <- function(f,A,Y,Z){
   tau <- length(Z)
   node_z <- Y[Z[1],"value"]
-
-  for (t in 2:tau){
-    node_z <- node_z * A[Z[t],Z[t-1]]
+  if(tau > 1){
+    for (t in 2:tau){
+      node_z <- node_z * A[Z[t],Z[t-1]]
+    }
   }
-
   return(f[Z[tau],"value"]*node_z)
 
 }
