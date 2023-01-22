@@ -1,0 +1,2417 @@
+
+---
+title: "Notebook réindustrialisation"
+author: "Alexandre BOURGEOIS"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+%\VignetteIndexEntry{Vignette Title}
+%\VignetteEngine{knitr::rmarkdown}
+\usepackage[utf8]{inputenc}
+---
+
+**Loading of packages and global parameters**
+
+```{r setup, include=FALSE}
+# Display of the code ?
+knitr::opts_chunk$set(echo = TRUE) 
+
+# Loading packages
+library(microbenchmark)
+library(RcppArmadillo)
+library(Rcpp)
+library(dplyr)
+#remove.packages("ggplot2")
+#install.packages("ggplot2")
+library(ggfortify)
+library(stringr)
+library(tidyverse)
+options(java.parameters = "-Xmx8000m")
+library(rJava)
+library(xlsxjars)
+library(xlsx)
+library(readxl)
+library(readODS)
+library(R6)
+library(tidyr)
+library(writexl)
+library(WriteXLS)
+library(fmsb)
+library(ggplot2)
+library(roxygen2)
+library(devtools)
+library(forecast)
+library(fable)
+library(Metrics)
+library(xts)
+library(data.table)
+
+
+source("Reindus functions.R")
+
+# Chemins d'accès
+Path_FIG22ixi<-"X:/HAB-Empreinte-carbone/MRIO/02_Bases ICIO et MRIO/FIGARO 2022/ixi/"
+Path_FIG22pxp<-"X:/HAB-Empreinte-carbone/MRIO/02_Bases ICIO et MRIO/FIGARO 2022/pxp/"
+Path_FIG22emi<-"X:/HAB-Empreinte-carbone/MRIO/04_Bases_emissions_GES/FIGARO 22/CO2/"
+Path_SIOTEurostat <-"X:/HAB-Empreinte-carbone/MRIO/02_Bases ICIO et MRIO/SIOT_Eurostat/"
+PathS<-"Sorties/"
+Path_WIODLR<-"X:/HAB-Empreinte-carbone/MRIO/02_Bases ICIO et MRIO/WIOD-LR 2022/"
+Path_WIOD<-"X:/HAB-Empreinte-carbone/MRIO/02_Bases ICIO et MRIO/WIOD 2016 release/"
+Path_TabPass<-"X:/HAB-Empreinte-carbone/MRIO/05_Tables de passage/"
+
+```
+
+Fonctions utiles par la suite
+```{r}
+cppFunction("arma::mat CFPcalculationRCPP(arma::mat ef, arma::mat L,arma::mat  FD){return ef*L*FD;}",
+            depends="RcppArmadillo")
+cppFunction("arma::mat inversion_rcpp3(arma::mat m1){arma::mat m2 = inv(m1); return(m2);}",
+            depends="RcppArmadillo")
+cppFunction("arma::mat Mult2_rcpp3(arma::mat matA, arma::mat matB){return matA*matB;}",
+            depends="RcppArmadillo")
+# Fonction de transformation en vecteur dataframe
+vectDF<- function(vect){
+  out<-as.data.frame(vect, drop=FALSE)
+  return(out)
+}
+# Fonction pour convertir les infinity en NA et les NA en 0 ou 1 par exemple
+GereInfNA <- function(df,impute=0){  
+  if(ncol(df)==1){ # Si c'est un vecteur qui est gere comme une liste
+  df<-lapply(df, function(x) {
+    x[is.infinite(x)] <- impute 
+    return(x)
+    } )
+  df<-lapply(df, function(x) {
+    x[is.na(x)] <- impute 
+    return(x)
+  } )
+  df<-vectDF(df)
+}else{ # Si c'est une matrice avec plusieurs colonnes
+  is.na(df)<-sapply(df, is.infinite)
+  df[is.na(df)]<-impute
+}
+  return(df)
+}
+GetRownamesFromFirstCol <- function(df)
+{
+  df<-as.data.frame(df)
+  rownames(df)<-as.character(df[,1])
+  dfout<-df[,-1,drop=FALSE]
+  return (dfout)
+}
+AddRownamesToFirstCol <- function(df)
+{
+  df<-as.data.frame(df)
+  df2<-cbind(rownames(df),df)
+  df2<-as.data.frame(df2)
+  colnames(df2)[1]<-"joint"
+  return (df2)
+}
+
+```
+
+
+Lecture table Figaro 22 et attribution des composantes du MRIO
+```{r}
+mrio_fig22_2019 <- fread(paste0(Path_FIG22ixi,"matrix_eu-ic-io_ind-by-ind_2019.csv"))
+
+emi_fig22_2019 <- fread(paste0(Path_FIG22emi,"CO2Footprint_2019_20220404.csv"))
+
+Vect_emi<-emi_fig22_2019[,sum(obs_value),by=c("ref_area","industry")]  # .SDcols = c("Imp_services", "MC", "MT")
+
+print(emi_fig22_2019[,sum(obs_value),by=c("ref_area")])
+
+# Contrôle
+#  En 2020, près de 251 millions de tonnes de dioxyde de carbone ont été émises en France.
+print(Vect_emi[ref_area=="FR",sum(V1)] )
+
+# Ajout de la production par calcul
+mrio_fig22_2019$Prod<-rowSums(mrio_fig22_2019[,2:3175])
+
+# Ajout d'une variable de jointure pays * BR
+Vect_emi$rowLabels<-paste0(Vect_emi$ref_area,"_",Vect_emi$industry)
+
+# Ajout des émissions par jointure : Merge du MRIO et des émissions
+MergeMRIO<-mrio_fig22_2019[Vect_emi, on=.(rowLabels)] # on=.(ref_area,industry)
+print(sum(MergeMRIO[which(substr(MergeMRIO$rowLabels,1,3)=='FR_'),"V1"]))
+
+# Transformation en DF
+Tab<-GetRownamesFromFirstCol(MergeMRIO)
+
+# Attribution des composantes du MRIO : 2944 ignes*col
+TEI<-Tab[1:2944,1:2944]
+TEI<-GereInfNA(TEI)
+Prod<-vectDF(Tab[1:2944,"Prod"])
+rownames(Prod)<-rownames(Tab[1:2944,])
+Emi<-vectDF(Tab[1:2944,"V1"])
+rownames(Emi)<-rownames(Tab[1:2944,])
+FD<-vectDF(rowSums(Tab[1:2944,2945:3174]))
+VApxBase<-GereInfNA(Prod-vectDF(colSums(TEI,na.rm=TRUE)))
+rownames(VApxBase)<-rownames(Tab[1:2944,])
+# VApxAcq<-vectDF(t(mrio_fig22_2019[2950,2:2945]))  # Attention ce n'est pas la VA...
+
+# Contrôles
+#LesVA<-cbind(VApxBase,VApxAcq)
+#rownames(LesVA)<-rownames(TEI)
+#print(LesVA[which(substr(rownames(Emi),1,3)=='FR_'),])
+#print(colSums(LesVA[which(substr(rownames(Emi),1,3)=='FR_'),],na.rm=TRUE))
+print(paste0("VA prix de base = ",sum(VApxBase[which(substr(rownames(Emi),1,3)=='FR_'),])))
+
+print(sum(Emi[which(substr(rownames(Emi),1,3)=='FR_'),])) # La difference vient des émissions directes des ménages qui sont à 110000 pour la FR
+
+
+
+```
+
+Calcul de l'empreinte CO2
+```{r}
+# Calcul de la matrice 'empreinte'
+part1<-as.matrix(diag(Emi$vect/Prod$vect))
+
+part2_1<-diag(2944)
+part2_2<-as.matrix(TEI[1:2944,1:2944])
+part2_3<-as.matrix(diag(1/Prod$vect))
+part2_3<-GereInfNA(part2_3)
+part2_4<-Mult2_rcpp3(part2_2,part2_3)
+part2_4<-GereInfNA(part2_4)
+part_synth<-part2_1-part2_4
+part_synth<-GereInfNA(part_synth)
+part_synth<-as.matrix(part_synth)
+part2<-inversion_rcpp3(part_synth)
+
+test<-solve(part_synth)
+
+part3<-as.matrix(diag(FD$vect))
+
+# Calcul de la matrice croisant Pays*BR de provenance vers Pays*BR de destination
+MatEmpreinte<-CFPcalculationRCPP(part1,part2,part3)
+rownames(MatEmpreinte)<-rownames(TEI[1:2944,1:2944])
+colnames(MatEmpreinte)<-colnames(TEI[1:2944,1:2944])
+
+MatEmpreinte<-GereInfNA(MatEmpreinte)
+
+# Calcul de l'empreinte CO2 en approche 'production'
+Empreinte_Production<-vectDF(rowSums(MatEmpreinte))
+rownames(Empreinte_Production)<-rownames(MatEmpreinte)
+
+# Calcul de l'empreinte CO2 en approche 'consommation'
+Empreinte_Conso<-vectDF(colSums(MatEmpreinte))
+rownames(Empreinte_Conso)<-rownames(MatEmpreinte)
+
+# controles
+print(sum(MatEmpreinte))
+print(sum(Empreinte_Production))
+print(sum(Empreinte_Conso))
+
+# Calcul de l'empreinte France
+print(sum(Empreinte_Production[which(substr(rownames(Empreinte_Production),1,3)=='FR_'),]))
+print(sum(Empreinte_Conso[which(substr(rownames(Empreinte_Conso),1,3)=='FR_'),]))
+
+```
+
+Boucle sur 2010-2019 (yc fonction de calcul simultané contenu en émissions et contenus en VA)
+```{r}
+# Fonction de calcul simultané contenu en émissions et contenus en VA
+CalcContenusEmiVA<- function(annee){
+  mrio_fig22 <- fread(paste0(Path_FIG22ixi,"matrix_eu-ic-io_ind-by-ind_",annee,".csv"))
+emi_fig22 <- fread(paste0(Path_FIG22emi,"CO2Footprint_",annee,"_20220404.csv"))
+Vect_emi<-emi_fig22[,sum(obs_value),by=c("ref_area","industry")]  
+# Ajout de la production par calcul
+mrio_fig22$Prod<-rowSums(mrio_fig22[,2:3175])
+# Ajout d'une variable de jointure pays * BR
+Vect_emi$rowLabels<-paste0(Vect_emi$ref_area,"_",Vect_emi$industry)
+# Ajout des émissions par jointure : Merge du MRIO et des émissions
+MergeMRIO<-mrio_fig22[Vect_emi, on=.(rowLabels)] # on=.(ref_area,industry)
+print(sum(MergeMRIO[which(substr(MergeMRIO$rowLabels,1,3)=='FR_'),"V1"]))
+# Transformation en DF
+Tab<-GetRownamesFromFirstCol(MergeMRIO)
+# Attribution des composantes du MRIO : 2944 ignes*col
+TEI<-Tab[1:2944,1:2944]
+TEI<-GereInfNA(TEI)
+Prod<-vectDF(Tab[1:2944,"Prod"])
+rownames(Prod)<-rownames(Tab[1:2944,])
+Emi<-vectDF(Tab[1:2944,"V1"])
+rownames(Emi)<-rownames(Tab[1:2944,])
+FD<-vectDF(rowSums(Tab[1:2944,2945:3174]))
+VApxBase<-GereInfNA(Prod-vectDF(colSums(TEI,na.rm=TRUE)))
+rownames(VApxBase)<-rownames(Tab[1:2944,]) 
+# Calcul de la matrice 'empreinte'
+part1<-rbind(as.matrix(diag(Emi$vect/Prod$vect)),as.matrix(diag(VApxBase$vect/Prod$vect)))
+part2_1<-diag(2944)
+part2_2<-as.matrix(TEI[1:2944,1:2944])
+part2_3<-as.matrix(diag(1/Prod$vect))
+part2_3<-GereInfNA(part2_3)
+part2_4<-Mult2_rcpp3(part2_2,part2_3)
+part2_4<-GereInfNA(part2_4)
+part_synth<-part2_1-part2_4
+part_synth<-GereInfNA(part_synth)
+part_synth<-as.matrix(part_synth)
+part2<-inversion_rcpp3(part_synth)
+test<-solve(part_synth)
+part3<-as.matrix(diag(FD$vect))
+# Calcul de la matrice croisant Pays*BR de provenance vers Pays*BR de destination
+MatEmpreinte<-CFPcalculationRCPP(part1,part2,part3)
+MatEmpreinte<-GereInfNA(MatEmpreinte)
+# Calcul de l'empreinte CO2 en approche 'consommation'
+Empreinte_Conso<-vectDF(colSums(MatEmpreinte[1:2944,1:2944]))
+Contenus_VA<-vectDF(colSums(MatEmpreinte[2945:5888,1:2944]))
+Contenus<-cbind(Empreinte_Conso,Contenus_VA)
+rownames(Contenus)<-rownames(Tab[1:2944,]) 
+Contenus_FRA<-Contenus[which(substr(rownames(Contenus),1,3)=='FR_'),]
+rownames(Contenus_FRA)<-rownames(Tab[which(substr(rownames(Contenus),1,3)=='FR_'),]) 
+colnames(Contenus)<-c("Empreinte_CO2","Contenus_VA")
+  return(Contenus_FRA)
+}
+
+# Tests
+#empr2020<-CalcContenusEmiVA(2019)
+#print(colSums(empr2015))
+
+# Boucle
+TableauRes<-CalcContenusEmiVA(2010) # Initialisation
+TableauEmi<-TableauRes
+TableauVA<-TableauRes
+
+for(k in 2011:2019){
+  TableauRes<-CalcContenusEmiVA(k)
+  TableauEmi<-cbind(TableauEmi,vectDF(TableauRes[,1]))
+  TableauVA<-cbind(TableauVA,vectDF(TableauRes[,2]))
+}
+TableauEmi<-TableauEmi[,-2] # On retire la VA parasite de 2010
+TableauVA<-TableauVA[,-1] # On retire Emi parasite de 2010
+
+colnames(TableauEmi)<-seq(2010,2019,by=1)
+colnames(TableauVA)<-seq(2010,2019,by=1)
+
+saveRDS(TableauEmi,"Serie_Chrono_EmiCO2_2010-2019.rds")
+saveRDS(TableauVA,"Serie_Chrono_ContenuVA_2010-2019.rds")
+
+write.xlsx(TableauEmi, "Serie_Chrono_2010-2019.xlsx", sheetName = "ContenusEmissions", col.names = TRUE, row.names = TRUE)
+write.xlsx(TableauVA, "Serie_Chrono_2010-2019.xlsx", sheetName = "ContenusVA", col.names = TRUE, row.names = TRUE,append=TRUE)
+
+
+```
+
+Calcul des contenus en emplois par méthode SRIO classique (TES symétrique France niv 64 issu d'Eurostat)
+```{r}
+BaseSIOTFRA <- fread(paste0(Path_SIOTEurostat,"naio_10_cp1700_linear.csv")) # Source chercher "naio_10_cp1700" sur moteur de recherche d'Eurostat
+BaseEmploi<- fread(paste0(Path_FIG22empl,"nama_10_a64_e_linear.csv")) # Source données d'emplois dans la rubrique comptes nationaux du site d'eurostat
+
+annee=2015
+
+# Sélections dans la table pour en limiter la taille
+TES_w<-BaseSIOTFRA[geo=="FR" & TIME_PERIOD==annee & unit=="MIO_EUR" & stk_flow=="DOM",] # Attention on ne retient que la partie domestique (cf DT Avionic)
+
+
+# Import de la table de référence des codes (et qui est aussi une table de passage)
+REFcodesA64<-read_excel(paste0(Path_SIOTEurostat,"NomencSIOT.xlsx"),sheet = "INDUSTRY", col_names = TRUE)
+REFcodesA64<-setDT(REFcodesA64)
+REFcodesOPdemandFin<-read_excel(paste0(Path_SIOTEurostat,"NomencSIOT.xlsx"),sheet = "OP", col_names = TRUE)
+REFcodesOPdemandFin<-setDT(REFcodesOPdemandFin)
+
+# Selection des composantes du TESS et mise sous forme de tableau
+# Prod
+
+#setnames(REFcodesA64, "INDUSTRY", "prod_na")
+Prod_w<-TES_w[prod_na=="P1",]
+Prod_w2<-REFcodesA64[Prod_w,on=.(INDUSTRY=induse),  nomatch=0]
+Prod_w3<-Prod_w2[,sum(OBS_VALUE),by=.(INDUSTRY_AGG)]
+Prod_w<-Prod_w3
+              
+# Demande finale (agrégée en un total DF grace à la table de passage)
+DF_w<-TES_w[induse=="P3"|induse=="P5"|induse=="P6",]
+DF_w2<-REFcodesA64[DF_w,on=.(INDUSTRY=prod_na),  nomatch=0]
+DF_w3<-DF_w2[,sum(OBS_VALUE),by=.(INDUSTRY_AGG,induse)]
+DF_w4<-REFcodesOPdemandFin[DF_w3,on=.(DetailDemandFinale=induse),  nomatch=0]
+DF_w5<-DF_w4[,sum(V1),by=.(Agregat,INDUSTRY_AGG)]
+setnames(DF_w5, "V1", "OBS_VALUE")
+DF_w<-DF_w5[,-1]
+
+# TEI
+TEI_w<-REFcodesA64[TES_w,on=.(INDUSTRY=induse),  nomatch=0]
+TEI_w2<-REFcodesA64[TEI_w,on=.(INDUSTRY=prod_na),  nomatch=0]
+TEI_w3<-TEI_w2[,sum(OBS_VALUE),by=.(INDUSTRY_AGG,i.INDUSTRY_AGG,i.INDUSTRY)]
+TEI_w4<-TEI_w3[,sum(V1),by=.(i.INDUSTRY_AGG,INDUSTRY_AGG)]
+TEI_w5<-dcast(TEI_w4,INDUSTRY_AGG~i.INDUSTRY_AGG,value.var="V1")
+TEI_w<-TEI_w5
+
+# Mise en forme
+Prod_DF<-setDF(Prod_w)
+DF_DF<-setDF(DF_w)
+TEI_DF<-setDF(TEI_w)
+Prod_DF<-GetRownamesFromFirstCol(Prod_DF)
+colnames(Prod_DF)[1]<-"PROD"
+DF_DF<-GetRownamesFromFirstCol(DF_DF)
+colnames(DF_DF)[1]<-"DEM_FINALE"
+TEI_DF<-GetRownamesFromFirstCol(TEI_DF)
+
+# Récupération du vecteur stressor (emplois par branches)
+#   [EMP_DC] Emploi total - concept intérieur
+#   [SAL_DC] Salariés - concept intérieur
+#   [SELF_DC] Indépendants - concept intérieur 
+# [THS_HW] Milliers d'heures travaillées
+# [THS_PER] Milliers de personnes
+# [THS_JOB] Milliers d'emplois 
+
+# Attention la nomenclature des tables d'emploi est légèrment différente, on charge un autre onglet qui a été adapté
+REFcodesA64emp<-read_excel(paste0(Path_SIOTEurostat,"NomencSIOT.xlsx"),sheet = "INDUSTRY_EMP", col_names = TRUE)
+REFcodesA64emp<-setDT(REFcodesA64emp)
+
+# Sélections dans la table pour en limiter la taille
+EMP_w<-BaseEmploi[geo=="FR" & TIME_PERIOD==annee & unit=="THS_PER" & na_item=="EMP_DC",]
+EMP_w$nace_r2<-paste0("CPA_",EMP_w$nace_r2)
+
+# Sélection et mise en forme
+EMP_w2<-REFcodesA64emp[EMP_w,on=.(INDUSTRY=nace_r2)]  # EMP_w2<-REFcodesA64[EMP_w,on=.(INDUSTRY=nace_r2),  nomatch=0]
+EMP_w3<-EMP_w2[,sum(OBS_VALUE),by=.(INDUSTRY_AGG)]
+EMP_w3<-EMP_w3[-1,]
+EMP_w<-EMP_w3
+EMP_DF<-setDF(EMP_w)
+EMP_DF<-GetRownamesFromFirstCol(EMP_DF)
+colnames(EMP_DF)[1]<-"EMPLOI"
+
+# Contrôles
+print(paste0("Totaux de Prod : ",round(sum(Prod_DF),0)," , de TEI : ", round(sum(TEI_DF),0), " , de la demande finale : ",round(sum(DF_DF),0), " , et enfin de l'emploi : ",round(sum(EMP_DF),0)))
+print(vectDF(Prod_DF-vectDF(rowSums(TEI_DF))-DF_DF)) # contrôle équilibre ressources-emplois
+
+# Calcul du contenu en emplois
+
+# Calcul de la matrice 'empreinte'
+part1<-as.matrix(diag(EMP_DF$EMPLOI/Prod_DF$PROD))
+
+part2_1<-diag(64)
+part2_2<-as.matrix(TEI_DF[1:64,1:64])
+part2_3<-as.matrix(diag(1/Prod_DF$PROD))
+part2_3<-GereInfNA(part2_3)
+part2_4<-Mult2_rcpp3(part2_2,part2_3)
+part2_4<-GereInfNA(part2_4)
+part_synth<-part2_1-part2_4
+part_synth<-GereInfNA(part_synth)
+part_synth<-as.matrix(part_synth)
+part2<-inversion_rcpp3(part_synth)
+
+part3<-as.matrix(diag(DF_DF$DEM_FINALE))
+
+# Calcul de la matrice croisant Pays*BR de provenance vers Pays*BR de destination
+MatEmpreinte<-CFPcalculationRCPP(part1,part2,part3)
+rownames(MatEmpreinte)<-rownames(TEI_DF[1:64,1:64])
+colnames(MatEmpreinte)<-colnames(TEI_DF[1:64,1:64])
+
+MatEmpreinte<-GereInfNA(MatEmpreinte)
+
+# Calcul des contenus en emplois par produit
+Contenus_Emplois<-vectDF(colSums(MatEmpreinte))
+rownames(Contenus_Emplois)<-rownames(MatEmpreinte)
+
+# controles
+print(sum(MatEmpreinte))
+print(sum(Contenus_Emplois))
+print(sum(EMP_DF))
+
+
+```
+
+Création d'une fonction de calcul des contenus en emploi et boucle
+```{r}
+
+#   [EMP_DC] Emploi total - concept intérieur
+#   [SAL_DC] Salariés - concept intérieur
+#   [SELF_DC] Indépendants - concept intérieur 
+# [THS_HW] Milliers d'heures travaillées
+# [THS_PER] Milliers de personnes
+# [THS_JOB] Milliers d'emplois 
+FunctionContenuEmplois <- function(annee,valo="THS_PER",TypEmploi="EMP_DC",verbose=FALSE)
+{
+TES_w<-BaseSIOTFRA[geo=="FR" & TIME_PERIOD==annee & unit=="MIO_EUR" & stk_flow=="DOM",] # Attention on ne retient que la partie domestique (cf DT Avionic)
+REFcodesA64<-read_excel(paste0(Path_SIOTEurostat,"NomencSIOT.xlsx"),sheet = "INDUSTRY", col_names = TRUE)
+REFcodesA64<-setDT(REFcodesA64)
+REFcodesOPdemandFin<-read_excel(paste0(Path_SIOTEurostat,"NomencSIOT.xlsx"),sheet = "OP", col_names = TRUE)
+REFcodesOPdemandFin<-setDT(REFcodesOPdemandFin)
+Prod_w<-TES_w[prod_na=="P1",]
+Prod_w2<-REFcodesA64[Prod_w,on=.(INDUSTRY=induse),  nomatch=0]
+Prod_w3<-Prod_w2[,sum(OBS_VALUE),by=.(INDUSTRY_AGG)]
+Prod_w<-Prod_w3
+DF_w<-TES_w[induse=="P3"|induse=="P5"|induse=="P6",]
+DF_w2<-REFcodesA64[DF_w,on=.(INDUSTRY=prod_na),  nomatch=0]
+DF_w3<-DF_w2[,sum(OBS_VALUE),by=.(INDUSTRY_AGG,induse)]
+DF_w4<-REFcodesOPdemandFin[DF_w3,on=.(DetailDemandFinale=induse),  nomatch=0]
+DF_w5<-DF_w4[,sum(V1),by=.(Agregat,INDUSTRY_AGG)]
+setnames(DF_w5, "V1", "OBS_VALUE")
+DF_w<-DF_w5[,-1]
+TEI_w<-REFcodesA64[TES_w,on=.(INDUSTRY=induse),  nomatch=0]
+TEI_w2<-REFcodesA64[TEI_w,on=.(INDUSTRY=prod_na),  nomatch=0]
+TEI_w3<-TEI_w2[,sum(OBS_VALUE),by=.(INDUSTRY_AGG,i.INDUSTRY_AGG,i.INDUSTRY)]
+TEI_w4<-TEI_w3[,sum(V1),by=.(i.INDUSTRY_AGG,INDUSTRY_AGG)]
+TEI_w5<-dcast(TEI_w4,INDUSTRY_AGG~i.INDUSTRY_AGG,value.var="V1")
+TEI_w<-TEI_w5
+Prod_DF<-setDF(Prod_w)
+DF_DF<-setDF(DF_w)
+TEI_DF<-setDF(TEI_w)
+Prod_DF<-GetRownamesFromFirstCol(Prod_DF)
+colnames(Prod_DF)[1]<-"PROD"
+DF_DF<-GetRownamesFromFirstCol(DF_DF)
+colnames(DF_DF)[1]<-"DEM_FINALE"
+TEI_DF<-GetRownamesFromFirstCol(TEI_DF)
+REFcodesA64emp<-read_excel(paste0(Path_SIOTEurostat,"NomencSIOT.xlsx"),sheet = "INDUSTRY_EMP", col_names = TRUE)
+REFcodesA64emp<-setDT(REFcodesA64emp)
+EMP_w<-BaseEmploi[geo=="FR" & TIME_PERIOD==annee & unit==valo & na_item==TypEmploi,]
+EMP_w$nace_r2<-paste0("CPA_",EMP_w$nace_r2)
+EMP_w2<-REFcodesA64emp[EMP_w,on=.(INDUSTRY=nace_r2)]  # EMP_w2<-REFcodesA64[EMP_w,on=.(INDUSTRY=nace_r2),  nomatch=0]
+EMP_w3<-EMP_w2[,sum(OBS_VALUE),by=.(INDUSTRY_AGG)]
+EMP_w3<-EMP_w3[-1,]
+EMP_w<-EMP_w3
+EMP_DF<-setDF(EMP_w)
+EMP_DF<-GetRownamesFromFirstCol(EMP_DF)
+print(sum(EMP_DF))
+colnames(EMP_DF)[1]<-"EMPLOI"
+if(verbose==TRUE){print(paste0("Totaux de Prod : ",round(sum(Prod_DF),0)," , de TEI : ", round(sum(TEI_DF),0), " , de la demande finale : ",round(sum(DF_DF),0), " , et enfin de l'emploi : ",round(sum(EMP_DF),0)))
+print(vectDF(Prod_DF-vectDF(rowSums(TEI_DF))-DF_DF)) # contrôle équilibre ressources-emplois
+}
+part1<-as.matrix(diag(EMP_DF$EMPLOI/Prod_DF$PROD))
+part2_1<-diag(64)
+part2_2<-as.matrix(TEI_DF[1:64,1:64])
+part2_3<-as.matrix(diag(1/Prod_DF$PROD))
+part2_3<-GereInfNA(part2_3)
+part2_4<-Mult2_rcpp3(part2_2,part2_3)
+part2_4<-GereInfNA(part2_4)
+part_synth<-part2_1-part2_4
+part_synth<-GereInfNA(part_synth)
+part_synth<-as.matrix(part_synth)
+part2<-inversion_rcpp3(part_synth)
+part3<-as.matrix(diag(DF_DF$DEM_FINALE))
+MatEmpreinte<-CFPcalculationRCPP(part1,part2,part3)
+rownames(MatEmpreinte)<-rownames(TEI_DF[1:64,1:64])
+colnames(MatEmpreinte)<-colnames(TEI_DF[1:64,1:64])
+MatEmpreinte<-GereInfNA(MatEmpreinte)
+Contenus_Emplois<-vectDF(colSums(MatEmpreinte))
+rownames(Contenus_Emplois)<-rownames(MatEmpreinte)
+if(verbose==TRUE){
+print(sum(MatEmpreinte))
+print(sum(Contenus_Emplois))
+print(sum(EMP_DF))
+}
+
+return(Contenus_Emplois)
+}
+
+#print(FunctionContenuEmplois(2018,valo="THS_PER",TypEmploi="EMP_DC",verbose=TRUE))
+
+# Boucle
+TableauRes<-FunctionContenuEmplois(2010) # Initialisation
+print(sum(TableauRes))
+print(sum(FunctionContenuEmplois(2017)))
+for(k in 2011:2018){
+  TableauResInterm<-FunctionContenuEmplois(k)
+  TableauRes<-cbind(TableauRes,TableauResInterm)
+}
+
+TableauRes<-1000*TableauRes # Car le nombre d'meplois étiat initialement en milliers
+colnames(TableauRes)<-seq(2010,2018,by=1)
+
+saveRDS(TableauRes,"Serie_Chrono_ContenuEmploi_2010-2018.rds")
+
+write.xlsx(TableauRes, "Serie_Chrono_2010-2018.xlsx", sheetName = "ContenusEmplois", col.names = TRUE, row.names = TRUE,append=TRUE)
+
+
+```
+
+Calcul de la part de la conso des ménages dans les dépenses de conso (pour proratiser les empreintes)
+```{r}
+BaseSIOTFRA <- fread(paste0(Path_SIOTEurostat,"naio_10_cp1700_linear.csv")) # Source chercher "naio_10_cp1700" sur moteur de recherche d'Eurostat
+
+FunctionContenuEmplois <- function(annee,verbose=FALSE)
+{
+
+# Sélections dans la table pour en limiter la taille
+TES_w<-BaseSIOTFRA[geo=="FR" & TIME_PERIOD==annee & unit=="MIO_EUR" & stk_flow=="TOTAL",]     # ATTENTION : on est sur le total et pas que DOM
+
+# Import de la table de référence des codes (et qui est aussi une table de passage)
+REFcodesA64<-read_excel(paste0(Path_SIOTEurostat,"NomencSIOT.xlsx"),sheet = "INDUSTRY", col_names = TRUE)
+REFcodesA64<-setDT(REFcodesA64)
+REFcodesOPdemandFin<-read_excel(paste0(Path_SIOTEurostat,"NomencSIOT.xlsx"),sheet = "OP", col_names = TRUE)
+REFcodesOPdemandFin<-setDT(REFcodesOPdemandFin)
+
+# Demande finale (agrégée en un total DF grace à la table de passage)
+DF_w<-TES_w[induse=="P3"|induse=="P5"|induse=="P6",]
+DF_w2<-REFcodesA64[DF_w,on=.(INDUSTRY=prod_na),  nomatch=0]
+DF_w3<-DF_w2[,sum(OBS_VALUE),by=.(INDUSTRY_AGG,induse)]
+DF_w4<-REFcodesOPdemandFin[DF_w3,on=.(DetailDemandFinale=induse),  nomatch=0]
+DF_w5<-DF_w4[,sum(V1),by=.(Agregat,INDUSTRY_AGG)]
+setnames(DF_w5, "V1", "OBS_VALUE")
+DF_w<-DF_w5[,-1]
+DF_w<-GetRownamesFromFirstCol(DF_w)
+
+DF_wbis<-TES_w[induse=="P3_S14",]
+DF_w2bis<-REFcodesA64[DF_wbis,on=.(INDUSTRY=prod_na),  nomatch=0]
+DF_w3bis<-DF_w2bis[,sum(OBS_VALUE),by=.(INDUSTRY_AGG,induse)]
+setnames(DF_w3bis, "V1", "OBS_VALUE")
+DF_wbis<-DF_w3bis[,-1]
+DF_wbis[,1]<-rownames(DF_w)
+DF_wbis<-GetRownamesFromFirstCol(DF_wbis)
+
+ratio<-GereInfNA(DF_wbis/DF_w)
+rownames(ratio)<-rownames(DF_w)
+if(verbose==TRUE){
+  print(cbind(DF_w,DF_wbis,ratio))
+}
+
+return(ratio)
+}
+
+# toto<-FunctionContenuEmplois(2015,verbose=TRUE)
+
+# Boucle
+TableauRes<-FunctionContenuEmplois(2010) # Initialisation
+
+for(k in 2011:2018){
+  TableauResInterm<-FunctionContenuEmplois(k)
+  TableauRes<-cbind(TableauRes,TableauResInterm)
+}
+
+colnames(TableauRes)<-seq(2010,2018,by=1)
+
+saveRDS(TableauRes,"Serie_Chrono_ratio_ConsoMensurDF_2010-2018.rds")
+
+write.xlsx(TableauRes, "Serie_Chrono_2010-2018.xlsx", sheetName = "Ratio_P3S14surDF", col.names = TRUE, row.names = TRUE,append=TRUE)
+
+```
+
+
+
+
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+REMARQUE DT BIENS DURABLES ET OCCASION : ATTENTION : Ici on calcule uniquement les bases de contenus en émissions, VA et emplois au niveau 64, mais l'attribution aux niveaux H se fait dans un autre Rmd (Misc/Biens durables et d'occasions) 
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
+
+
+**Première partie : On crée les bases avec les données d'origine dans correction aucune, just eon rapoute le calcul de la prod pour Figaro car elle n'y est pas d'origine**
+
+Test de formatage des données Figaro pour en faire une base de données unique
+```{r}
+mrio_fig22_2019 <- fread(paste0(Path_FIG22ixi,"matrix_eu-ic-io_ind-by-ind_2019.csv"))
+
+# Ajout de la production par calcul
+mrio_fig22_2019$Prod<-rowSums(mrio_fig22_2019[,2:3175])
+setnames(mrio_fig22_2019, "rowLabels", "PR")
+
+# Transformation en format long
+mrio_fig22_2019_long<-melt(mrio_fig22_2019, id.vars = c("PR"),
+                measure.vars = 2:3176)
+setnames(mrio_fig22_2019_long, "variable", "BR")
+
+# Split des _
+mrio_fig22_2019_long$annee<-2019
+mrio_fig22_2019_long$Contry_Lig<-str_extract(mrio_fig22_2019_long$PR, "[^_]+")
+mrio_fig22_2019_long$PR_Lig<-substring(str_extract(mrio_fig22_2019_long$PR, "_.+$"),2)
+mrio_fig22_2019_long$Contry_Col<-str_extract(mrio_fig22_2019_long$BR, "[^_]+")
+mrio_fig22_2019_long$PR_Col<-substring(str_extract(mrio_fig22_2019_long$BR, "_.+$"),2)
+mrio_fig22_2019_long[is.na(mrio_fig22_2019_long),]<-"TOTAL" # Pour la Prod on met total pour les cases mises a NA
+mrio_fig22_2019_long<-mrio_fig22_2019_long[,3:8] # On drop les PR et BR d'origine
+
+
+```
+
+Boucle constitution de la base de données Figaro BD_FIG
+```{r}
+
+### partie d'initialisation de la base BD_FIG
+
+mrio_fig22_2010 <- fread(paste0(Path_FIG22ixi,"matrix_eu-ic-io_ind-by-ind_2010.csv"))
+
+# Ajout de la production par calcul
+mrio_fig22_2010$Prod<-rowSums(mrio_fig22_2010[,2:3175])
+setnames(mrio_fig22_2010, "rowLabels", "PR")
+
+# Transformation en format long
+BD_FIG<-melt(mrio_fig22_2010, id.vars = c("PR"),
+                measure.vars = 2:3176)
+setnames(BD_FIG, "variable", "BR")
+
+# Split des _
+BD_FIG$annee<-2010
+BD_FIG$Contry_Lig<-str_extract(BD_FIG$PR, "[^_]+")
+BD_FIG$PR_Lig<-substring(str_extract(BD_FIG$PR, "_.+$"),2)
+BD_FIG$Contry_Col<-str_extract(BD_FIG$BR, "[^_]+")
+BD_FIG$PR_Col<-substring(str_extract(BD_FIG$BR, "_.+$"),2)
+BD_FIG[is.na(BD_FIG),]<-"TOTAL" # Pour la Prod on met total pour les cases mises a NA
+BD_FIG<-BD_FIG[,3:8] # On drop les PR et BR d'origine
+
+### partie itération et bind sur les autres années
+
+for(k in 2011:2020){
+  mrio_fig22_20XX <- fread(paste0(Path_FIG22ixi,paste0("matrix_eu-ic-io_ind-by-ind_",k,".csv")))
+
+# Ajout de la production par calcul
+mrio_fig22_20XX$Prod<-rowSums(mrio_fig22_20XX[,2:3175])
+setnames(mrio_fig22_20XX, "rowLabels", "PR")
+
+# Transformation en format long
+mrio_fig22_20XX_long<-melt(mrio_fig22_20XX, id.vars = c("PR"),
+                measure.vars = 2:3176)
+setnames(mrio_fig22_20XX_long, "variable", "BR")
+
+# Split des _
+mrio_fig22_20XX_long$annee<-as.numeric(k)
+mrio_fig22_20XX_long$Contry_Lig<-str_extract(mrio_fig22_20XX_long$PR, "[^_]+")
+mrio_fig22_20XX_long$PR_Lig<-substring(str_extract(mrio_fig22_20XX_long$PR, "_.+$"),2)
+mrio_fig22_20XX_long$Contry_Col<-str_extract(mrio_fig22_20XX_long$BR, "[^_]+")
+mrio_fig22_20XX_long$PR_Col<-substring(str_extract(mrio_fig22_20XX_long$BR, "_.+$"),2)
+mrio_fig22_20XX_long[is.na(mrio_fig22_20XX_long),]<-"TOTAL" # Pour la Prod on met total pour les cases mises a NA
+mrio_fig22_20XX_long<-mrio_fig22_20XX_long[,3:8] # On drop les PR et BR d'origine
+
+BD_FIG<-rbind(BD_FIG,mrio_fig22_20XX_long)
+
+}
+
+saveRDS(BD_FIG,"Sorties/BD_FIG.rds")
+
+BD_FIG_tab<-dcast(BD_FIG, Contry_Lig + PR_Lig + Contry_Col + PR_Col ~ annee, value.var = "value") # Mise en format tab avec années en colonne pour limiterle nombre de lignes de la base
+
+saveRDS(BD_FIG_tab,"Sorties/BD_FIG_tab.rds")
+
+```
+
+Chargement LR-WIOD et constitution de la BD_LR_WIOD (déjà presque au bon format)
+```{r}
+
+mrio_lrwiod <- fread(paste0(Path_WIODLR,"lr_wiod_wiot_final_filled.csv"))
+
+# Attention on est en dollars, on convertit en euros
+ConvertCurrency<-read_excel(paste0(Path_TabPass,"StructDocs et Tab_Pass_Reindus.xlsx"),sheet = "PariteEuroDollar", col_names = TRUE) 
+ConvertCurrency<-setDT(ConvertCurrency[,1:2])
+setnames(ConvertCurrency, "Year", "year")
+mrio_lrwiod_currency<-ConvertCurrency[mrio_lrwiod,on=.(year)]
+mrio_lrwiod_currency$value<-mrio_lrwiod_currency$value/mrio_lrwiod_currency$UnEuroEgalXdollars
+mrio_lrwiod_currency<-mrio_lrwiod_currency[,UnEuroEgalXdollars:=NULL]
+
+BD_LR_WIOD<-mrio_lrwiod_currency
+
+saveRDS(mrio_lrwiod_currency,"Sorties/BD_LR_WIOD.rds")
+
+BD_LR_WIOD_tab<-dcast(BD_LR_WIOD, row_country + row_id + row_isic3 + col_country + col_id + col_isic3 ~ year, value.var = "value") # Mise en format tab avec années en colonne pour limiterle nombre de lignes de la base
+
+saveRDS(BD_LR_WIOD_tab,"Sorties/BD_LR_WIOD_tab.rds")
+
+```
+
+Test de manipulation de WIOD
+```{r}
+# Attention ici on est en Dollars, mais dans la boucle on convertit en euros tout à la fin sur la base complète
+load(paste0(Path_WIOD,"WIOT2000_October16_ROW.RData"))
+
+base_test_wiod<-setDT(wiot)
+
+tstWiod<-melt(base_test_wiod, id.vars = c("IndustryCode","IndustryDescription","Country","RNr","Year"),
+                measure.vars = 6:2690)
+setnames(tstWiod, "variable", "BR")
+
+# Split de BR
+tstWiod$COL_code<-substring(tstWiod$BR,1,3)
+tstWiod$COL_Indus_num<-substring(tstWiod$BR,4)
+  
+tab_corresp<-tstWiod[1:56,c(1,4)]
+tab_corresp<-rbindlist(list(tab_corresp,data.table("Industrycode"="CONS_h","RNr"=57),data.table("Industrycode"="CONS_g","RNr"=58),data.table("Industrycode"="CONS_np","RNr"=59),data.table("Industrycode"="GFCF","RNr"=60),data.table("Industrycode"="INVEN","RNr"=61)))
+setnames(tab_corresp, "RNr", "COL_Indus_num") # pour préparer la jointure
+tab_corresp<-tab_corresp[,COL_Indus_num:=as.character(COL_Indus_num)] # Change format
+print(unique(tstWiod[,COL_Indus_num]))
+print(unique(tstWiod[COL_Indus_num=="",])) # Correspond à COL_code=TOT
+tstWiod<-tstWiod[tab_corresp, on=.(COL_Indus_num)]
+setnames(tstWiod, "i.IndustryCode", "COL_Indus")
+tstWiod[,BR:=NULL]
+setnames(tstWiod, "IndustryCode", "LIG_Indus")
+setnames(tstWiod, "Country", "LIG_Country")
+setnames(tstWiod, "COL_code", "COL_Country")
+setnames(tstWiod, "RNr", "LIG_Indus_num")
+setnames(tstWiod, "IndustryDescription", "LIG_IndustryDescription")
+print(unique(tstWiod[,COL_Country]))
+print(unique(tstWiod[LIG_Indus=="GO",])) # Ok la prod est toujours là
+
+  
+```
+
+
+Chargement WIOD et constitution de la BD_WIOD
+```{r}
+
+### Initialisation sur l'année 2000
+
+load(paste0(Path_WIOD,"WIOT2000_October16_ROW.RData"))
+base_wiod<-setDT(wiot)
+BD_WIOD<-melt(base_wiod, id.vars = c("IndustryCode","IndustryDescription","Country","RNr","Year"),
+                measure.vars = 6:2690)
+setnames(BD_WIOD, "variable", "BR")
+# Split de BR
+BD_WIOD$COL_code<-substring(BD_WIOD$BR,1,3)
+BD_WIOD$COL_Indus_num<-substring(BD_WIOD$BR,4)
+tab_corresp<-BD_WIOD[1:56,c(1,4)]
+tab_corresp<-rbindlist(list(tab_corresp,data.table("Industrycode"="CONS_h","RNr"=57),data.table("Industrycode"="CONS_g","RNr"=58),data.table("Industrycode"="CONS_np","RNr"=59),data.table("Industrycode"="GFCF","RNr"=60),data.table("Industrycode"="INVEN","RNr"=61)))
+setnames(tab_corresp, "RNr", "COL_Indus_num") # pour préparer la jointure
+tab_corresp<-tab_corresp[,COL_Indus_num:=as.character(COL_Indus_num)] # Change format
+BD_WIOD<-BD_WIOD[tab_corresp, on=.(COL_Indus_num)]
+setnames(BD_WIOD, "i.IndustryCode", "COL_Indus")
+BD_WIOD[,BR:=NULL]
+setnames(BD_WIOD, "IndustryCode", "LIG_Indus")
+setnames(BD_WIOD, "Country", "LIG_Country")
+setnames(BD_WIOD, "COL_code", "COL_Country")
+setnames(BD_WIOD, "RNr", "LIG_Indus_num")
+setnames(BD_WIOD, "IndustryDescription", "LIG_IndustryDescription")
+
+### Boucle de 2001 à 2014
+
+for(k in 2001:2014){
+load(paste0(Path_WIOD,paste0("WIOT",k,"_October16_ROW.RData")))
+base_wiod<-setDT(wiot)
+BD_WIODy<-melt(base_wiod, id.vars = c("IndustryCode","IndustryDescription","Country","RNr","Year"),
+                measure.vars = 6:2690)
+setnames(BD_WIODy, "variable", "BR")
+# Split de BR
+BD_WIODy$COL_code<-substring(BD_WIODy$BR,1,3)
+BD_WIODy$COL_Indus_num<-substring(BD_WIODy$BR,4)
+tab_corresp<-BD_WIODy[1:56,c(1,4)]
+tab_corresp<-rbindlist(list(tab_corresp,data.table("Industrycode"="CONS_h","RNr"=57),data.table("Industrycode"="CONS_g","RNr"=58),data.table("Industrycode"="CONS_np","RNr"=59),data.table("Industrycode"="GFCF","RNr"=60),data.table("Industrycode"="INVEN","RNr"=61)))
+setnames(tab_corresp, "RNr", "COL_Indus_num") # pour préparer la jointure
+tab_corresp<-tab_corresp[,COL_Indus_num:=as.character(COL_Indus_num)] # Change format
+BD_WIODy<-BD_WIODy[tab_corresp, on=.(COL_Indus_num)]
+setnames(BD_WIODy, "i.IndustryCode", "COL_Indus")
+BD_WIODy[,BR:=NULL]
+setnames(BD_WIODy, "IndustryCode", "LIG_Indus")
+setnames(BD_WIODy, "Country", "LIG_Country")
+setnames(BD_WIODy, "COL_code", "COL_Country")
+setnames(BD_WIODy, "RNr", "LIG_Indus_num")
+setnames(BD_WIODy, "IndustryDescription", "LIG_IndustryDescription")
+  
+  BD_WIOD<-rbind(BD_WIOD,BD_WIODy)
+}
+
+#BD_WIOD<-readRDS("Sorties/BD_WIOD.rds")
+
+# Attention on est en dollars, on convertit en euros
+ConvertCurrency<-read_excel(paste0(Path_TabPass,"StructDocs et Tab_Pass_Reindus.xlsx"),sheet = "PariteEuroDollar", col_names = TRUE) 
+ConvertCurrency<-setDT(ConvertCurrency[,1:2])
+# setnames(ConvertCurrency, "Year", "year") # Pas nécessaire ici on est déjà en Year
+BD_WIOD_currency<-ConvertCurrency[BD_WIOD,on=.(Year)]
+BD_WIOD_currency$value<-BD_WIOD_currency$value/BD_WIOD_currency$UnEuroEgalXdollars
+BD_WIOD_currency<-BD_WIOD_currency[,UnEuroEgalXdollars:=NULL]
+
+saveRDS(BD_WIOD_currency,"Sorties/BD_WIOD.rds")
+
+BD_WIOD_tab<-dcast(BD_WIOD_currency, LIG_Country + LIG_Indus + LIG_IndustryDescription + LIG_Indus_num + COL_Country + COL_Indus + COL_Indus_num ~ Year, value.var = "value") # Mise en format tab avec années en colonne pour limiter le nombre de lignes de la base
+
+saveRDS(BD_WIOD_tab,"Sorties/BD_WIOD_tab.rds")
+
+```
+
+Contrôles intermédiaire sur les bases créées avant normalisation
+```{r}
+##############################################################################
+### FIGARO
+
+Test_FIG<-readRDS("Sorties/BD_FIG_tab.rds")
+
+# Extraction du TEI dom de l'année 2018
+fig_teiDom_2018<-Test_FIG[Contry_Lig=="FR" & Contry_Col=="FR",]
+fig_teiDom_2018<-fig_teiDom_2018[!PR_Col %in% c("P3_S13","P3_S14","P3_S15","P51G","P5M")]  # On enlève la demande finale
+# Selection de l'année 2018
+fig_teiDom_2018<-fig_teiDom_2018[,c("Contry_Lig","PR_Lig","Contry_Col","PR_Col","2018")]
+# Concaténation avant le DCAST
+fig_teiDom_2018$PR<-paste0(fig_teiDom_2018$Contry_Lig,"_",fig_teiDom_2018$PR_Lig)
+fig_teiDom_2018$BR<-paste0(fig_teiDom_2018$Contry_Col,"_",fig_teiDom_2018$PR_Col)
+# Mise sous forme de Tableau
+fig_teiDom_2018_tab<-dcast(fig_teiDom_2018, PR ~ BR, value.var = "2018") 
+# Valeur du total
+print(sum(fig_teiDom_2018_tab[,2:65]))
+
+# Extraction du TEI tot France de l'année 2018
+fig_teiTot_2018<-Test_FIG[Contry_Lig=="FR",]
+fig_teiTot_2018<-fig_teiTot_2018[!PR_Col %in% c("P3_S13","P3_S14","P3_S15","P51G","P5M","TOTAL")]  # On enlève la demande finale et le total DF+CI
+# Selection de l'année 2018
+fig_teiTot_2018<-fig_teiTot_2018[,c("Contry_Lig","PR_Lig","Contry_Col","PR_Col","2018")]
+# ATTENTION : ici On agrège les pays en colonne pour se ramener à un TEI carré
+setnames(fig_teiTot_2018, "2018", "value")
+fig_teiTot_2018<-fig_teiTot_2018[,sum(value),by=list(Contry_Lig,PR_Lig,PR_Col)]
+# Concaténation avant le DCAST
+fig_teiTot_2018$PR<-paste0(fig_teiTot_2018$Contry_Lig,"_",fig_teiTot_2018$PR_Lig)
+fig_teiTot_2018$BR<-paste0("TOTAL_",fig_teiTot_2018$PR_Col)
+# Mise sous forme de Tableau
+fig_teiTot_2018_tab<-dcast(fig_teiTot_2018, PR ~ BR, value.var = "V1") 
+# Valeur du total
+print(sum(fig_teiTot_2018_tab[,2:65]))
+
+# Extraction de la demande finale domestique de l'année 2018 (changer juste le ! dans la 2nde sélection)
+fig_dfdom_2018<-Test_FIG[Contry_Lig=="FR" & Contry_Col=="FR",]
+fig_dfdom_2018<-fig_dfdom_2018[PR_Col %in% c("P3_S13","P3_S14","P3_S15","P51G","P5M")]  # On garde uniquement la demande finale
+# Selection de l'année 2018
+fig_dfdom_2018<-fig_dfdom_2018[,c("Contry_Lig","PR_Lig","Contry_Col","PR_Col","2018")]
+# Concaténation avant le DCAST
+fig_dfdom_2018$PR<-paste0(fig_dfdom_2018$Contry_Lig,"_",fig_dfdom_2018$PR_Lig)
+fig_dfdom_2018$BR<-paste0(fig_dfdom_2018$Contry_Col,"_",fig_dfdom_2018$PR_Col)
+# Mise sous forme de Tableau
+fig_dfdom_2018_tab<-dcast(fig_dfdom_2018, PR ~ BR, value.var = "2018") 
+# Valeur du total
+print(sum(fig_dfdom_2018_tab[,2:6]))
+
+# Extraction de la demande finale totale de la France pour l'année 2018 (changer juste le ! dans la 2nde sélection)
+fig_dfTot_2018<-Test_FIG[Contry_Lig=="FR",]
+fig_dfTot_2018<-fig_dfTot_2018[PR_Col %in% c("P3_S13","P3_S14","P3_S15","P51G","P5M")]  # On garde uniquement la demande finale
+# Selection de l'année 2018
+fig_dfTot_2018<-fig_dfTot_2018[,c("Contry_Lig","PR_Lig","Contry_Col","PR_Col","2018")]
+# ATTENTION : ici On agrège les pays en colonne pour se ramener au total de la demande finale de la France
+setnames(fig_dfTot_2018, "2018", "value")
+fig_dfTot_2018<-fig_dfTot_2018[,sum(value),by=list(Contry_Lig,PR_Lig,PR_Col)]
+# Concaténation avant le DCAST
+fig_dfTot_2018$PR<-paste0(fig_dfTot_2018$Contry_Lig,"_",fig_dfTot_2018$PR_Lig)
+fig_dfTot_2018$BR<-paste0("TOTAL_",fig_dfTot_2018$PR_Col)
+# Mise sous forme de Tableau
+fig_dfTot_2018_tab<-dcast(fig_dfTot_2018, PR ~ BR, value.var = "V1") 
+# Valeur du total
+print(sum(fig_dfTot_2018_tab[,2:6]))
+
+# Extraction de la production de l'année 2018 
+fig_prod_2018<-Test_FIG[Contry_Lig=="FR" & PR_Col=="TOTAL" ,]
+fig_prod_2018<-fig_prod_2018[,c("Contry_Lig","PR_Lig","Contry_Col","PR_Col","2018")]
+
+# Check DF = VA (attention a bien le faire sur le total et pas sur le domestique)
+fig_DF<-fig_dfTot_2018_tab[, Sum := rowSums(.SD, na.rm = TRUE), .SDcols = grep("TOTAL_", names(fig_dfTot_2018_tab))] 
+fig_TEI<-fig_teiTot_2018_tab[, Sum := rowSums(.SD, na.rm = TRUE), .SDcols = grep("TOTAL_", names(fig_teiTot_2018_tab))] 
+fig_balance<-fig_prod_2018[,"2018"]-fig_DF[,"Sum"]-fig_TEI[,"Sum"]
+print(fig_balance)
+
+
+##############################################################################
+### WIOD
+
+Test_WIOD<-readRDS("Sorties/BD_WIOD_tab.rds")
+
+# Extraction du TEI tot France de l'année 2010
+wiod_teiTot_2010<-Test_WIOD[LIG_Country=="FRA",]
+wiod_teiTot_2010<-wiod_teiTot_2010[!COL_Indus %in% c("CONS_h","CONS_g","CONS_np","GFCF","INVEN","TOTAL")]  # On enlève la demande finale et le total DF+CI
+# Selection de l'année 2010
+wiod_teiTot_2010<-wiod_teiTot_2010[,c("LIG_Country","LIG_Indus","COL_Country","COL_Indus","2010")]
+# ATTENTION : ici On agrège les pays en colonne pour se ramener à un TEI carré
+setnames(wiod_teiTot_2010, "2010", "value")
+wiod_teiTot_2010<-wiod_teiTot_2010[,sum(value),by=list(LIG_Country,LIG_Indus,COL_Indus)]
+# Concaténation avant le DCAST
+wiod_teiTot_2010$PR<-paste0(wiod_teiTot_2010$LIG_Country,"_",wiod_teiTot_2010$LIG_Indus)
+wiod_teiTot_2010$BR<-paste0("TOTAL_",wiod_teiTot_2010$COL_Indus)
+# Mise sous forme de Tableau
+wiod_teiTot_2010_tab<-dcast(wiod_teiTot_2010, PR ~ BR, value.var = "V1") 
+# Valeur du total
+print(sum(wiod_teiTot_2010_tab[,2:57]))
+
+# Extraction de la demande finale totale de la France pour l'année 2010 (changer juste le ! dans la 2nde sélection)
+wiod_dfTot_2010<-Test_WIOD[LIG_Country=="FRA",]
+wiod_dfTot_2010<-wiod_dfTot_2010[COL_Indus %in% c("CONS_h","CONS_g","CONS_np","GFCF","INVEN")]  # On garde uniquement la demande finale
+# Selection de l'année 2010
+wiod_dfTot_2010<-wiod_dfTot_2010[,c("LIG_Country","LIG_Indus","COL_Country","COL_Indus","2010")]
+# ATTENTION : ici On agrège les pays en colonne pour se ramener au total de la demande finale de la France
+setnames(wiod_dfTot_2010, "2010", "value")
+wiod_dfTot_2010<-wiod_dfTot_2010[,sum(value),by=list(LIG_Country,LIG_Indus,COL_Indus)]
+# Concaténation avant le DCAST
+wiod_dfTot_2010$PR<-paste0(wiod_dfTot_2010$LIG_Country,"_",wiod_dfTot_2010$LIG_Indus)
+wiod_dfTot_2010$BR<-paste0("TOTAL_",wiod_dfTot_2010$COL_Indus)
+# Mise sous forme de Tableau
+wiod_dfTot_2010_tab<-dcast(wiod_dfTot_2010, PR ~ BR, value.var = "V1") 
+# Valeur du total
+print(sum(wiod_dfTot_2010_tab[,2:6]))
+
+# Extraction de la production de l'année 2010 
+wiod_prod_2010<-Test_WIOD[LIG_Indus=="GO" & COL_Country=="FRA",]
+wiod_prod_2010<-wiod_prod_2010[!COL_Indus %in% c("CONS_h","CONS_g","CONS_np","GFCF","INVEN","TOTAL")]  # On enlève la demande finale et le total DF+CI
+wiod_prod_2010<-wiod_prod_2010[,c("LIG_Country","LIG_Indus","COL_Country","COL_Indus","2010")]
+
+
+# Check DF = VA (attention a bien le faire sur le total et pas sur le domestique)
+wiod_DF<-wiod_dfTot_2010_tab[, Sum := rowSums(.SD, na.rm = TRUE), .SDcols = grep("TOTAL_", names(wiod_dfTot_2010_tab))] 
+wiod_TEI<-wiod_teiTot_2010_tab[, Sum := rowSums(.SD, na.rm = TRUE), .SDcols = grep("TOTAL_", names(wiod_teiTot_2010_tab))] 
+wiod_balance<-wiod_prod_2010[,"2010"]-wiod_DF[,"Sum"]-wiod_TEI[,"Sum"]
+print(wiod_balance)
+
+##############################################################################
+### LR WIOD
+
+Test_LRWIOD<-readRDS("Sorties/BD_LR_WIOD_tab.rds")
+
+# Extraction du TEI tot France de l'année 1995
+lrwiod_teiTot_1995<-Test_LRWIOD[row_country=="FRA",]
+lrwiod_teiTot_1995<-lrwiod_teiTot_1995[!col_isic3 %in% c("xCONS_h","xCONS_g","xCONS_np","xGFCF","xINVEN","xX","xM","xMRG_int","xGO","xINV")]  # On enlève la demande finale et le total DF+CI
+# Selection de l'année 1995
+lrwiod_teiTot_1995<-lrwiod_teiTot_1995[,c("row_country","row_isic3","col_country","col_isic3","1995")]
+# ATTENTION : ici On agrège les pays en colonne pour se ramener à un TEI carré
+setnames(lrwiod_teiTot_1995, "1995", "value")
+lrwiod_teiTot_1995<-lrwiod_teiTot_1995[,sum(value),by=list(row_country,row_isic3,col_isic3)]
+# Concaténation avant le DCAST
+lrwiod_teiTot_1995$PR<-paste0(lrwiod_teiTot_1995$row_country,"_",lrwiod_teiTot_1995$row_isic3)
+lrwiod_teiTot_1995$BR<-paste0("TOTAL_",lrwiod_teiTot_1995$col_isic3)
+# Mise sous forme de Tableau
+lrwiod_teiTot_1995_tab<-dcast(lrwiod_teiTot_1995, PR ~ BR, value.var = "V1") 
+# Valeur du total
+print(sum(lrwiod_teiTot_1995_tab[,2:24]))
+
+
+# Extraction de la demande finale totale de la France pour l'année 2010 (changer juste le ! dans la 2nde sélection)
+lrwiod_dfTot_1995<-Test_LRWIOD[row_country=="FRA",]
+lrwiod_dfTot_1995<-lrwiod_dfTot_1995[col_isic3 %in% c("xCONS_h","xCONS_g","xCONS_np","xGFCF","xINVEN","xINV")]  # On garde uniquement la demande finale
+# Selection de l'année 1995
+lrwiod_dfTot_1995<-lrwiod_dfTot_1995[,c("row_country","row_isic3","col_country","col_isic3","1995")]
+# ATTENTION : ici On agrège les pays en colonne pour se ramener au total de la demande finale de la France
+setnames(lrwiod_dfTot_1995, "1995", "value")
+lrwiod_dfTot_1995<-lrwiod_dfTot_1995[,sum(value),by=list(row_country,row_isic3,col_isic3)]
+# Concaténation avant le DCAST
+lrwiod_dfTot_1995$PR<-paste0(lrwiod_dfTot_1995$row_country,"_",lrwiod_dfTot_1995$row_isic3)
+lrwiod_dfTot_1995$BR<-paste0("TOTAL_",lrwiod_dfTot_1995$col_isic3)
+# Mise sous forme de Tableau
+lrwiod_dfTot_1995_tab<-dcast(lrwiod_dfTot_1995, PR ~ BR, value.var = "V1") 
+# Valeur du total
+print(sum(lrwiod_dfTot_1995_tab[,2:4]))
+
+# Extraction de la production de l'année 1995 
+lrwiod_prod_1995<-Test_WIOD[row_isic3=="xGO" & col_country=="FRA",]
+lrwiod_prod_1995<-lrwiod_prod_1995[!col_isic3 %in% c("xCONS_h","xCONS_g","xCONS_np","xGFCF","xINVEN","xX","xM","xMRG_int","xGO","xINV")]  # On enlève la demande finale et le total DF+CI
+lrwiod_prod_1995<-lrwiod_prod_1995[,c("row_country","row_isic3","col_country","col_isic3","1995")]
+
+
+# Check DF = VA (attention a bien le faire sur le total et pas sur le domestique)
+lrwiod_DF<-lrwiod_dfTot_1995_tab[, Sum := rowSums(.SD, na.rm = TRUE), .SDcols = grep("TOTAL_", names(lrwiod_dfTot_1995_tab))] 
+lrwiod_TEI<-lrwiod_teiTot_1995_tab[, Sum := rowSums(.SD, na.rm = TRUE), .SDcols = grep("TOTAL_", names(lrwiod_teiTot_1995_tab))] 
+lrwiod_balance<-lrwiod_prod_1995[,"1995"]-lrwiod_DF[,"Sum"]-lrwiod_TEI[,"Sum"]
+print(lrwiod_balance)
+```
+
+Normalisation des noms de variable des bases pour faciliter les traitements au delà des contrôles ci-dessus
+```{r}
+# Chargement des tables
+Interm_LRWIOD<-readRDS("Sorties/BD_LR_WIOD.rds")
+Interm_WIOD<-readRDS("Sorties/BD_WIOD.rds")
+Interm_FIG<-readRDS("Sorties/BD_FIG.rds")
+
+# Chargement des tables de passage
+TabPassGEO<-read_excel(paste0(Path_TabPass,"StructDocs et Tab_Pass_Reindus.xlsx"),sheet = "TabPass_GEO", col_names = TRUE) 
+TabPassIND<-read_excel(paste0(Path_TabPass,"StructDocs et Tab_Pass_Reindus.xlsx"),sheet = "TabPass_PR", col_names = TRUE) 
+
+### Normalisation des noms de pays en ISO3 pour faciliter le suivi en séries temps
+
+# Pour FIGARO
+TabPassGEO_FIG<-TabPassGEO[,c("FIGARO22_CODE_2","ISO3_CODE_Official")]  
+TabPassGEO_FIG<-setDT(TabPassGEO_FIG)
+Interm2_FIG<-na.omit(Interm_FIG[TabPassGEO_FIG,on=.(Contry_Lig=FIGARO22_CODE_2)])
+Interm2_FIG<-Interm2_FIG[,Contry_Lig:=NULL]
+setnames(Interm2_FIG,"ISO3_CODE_Official","Contry_Lig")
+Interm2_FIG<-na.omit(Interm2_FIG[TabPassGEO_FIG,on=.(Contry_Col=FIGARO22_CODE_2)])
+Interm2_FIG<-Interm2_FIG[,Contry_Col:=NULL]
+setnames(Interm2_FIG,"ISO3_CODE_Official","Contry_Col")
+
+# Pour WIOD
+TabPassGEO_FIG<-TabPassGEO[,c("WIOD16_CODE","ISO3_CODE_Official")]  
+TabPassGEO_FIG<-setDT(TabPassGEO_FIG)
+Interm2_WIOD<-na.omit(Interm_WIOD[TabPassGEO_FIG,on=.(LIG_Country=WIOD16_CODE)])
+Interm2_WIOD<-Interm2_WIOD[,LIG_Country:=NULL]
+setnames(Interm2_WIOD,"ISO3_CODE_Official","LIG_Country")
+Interm2_WIOD<-na.omit(Interm2_WIOD[TabPassGEO_FIG,on=.(COL_Country=WIOD16_CODE)])
+Interm2_WIOD<-Interm2_WIOD[,COL_Country:=NULL]
+setnames(Interm2_WIOD,"ISO3_CODE_Official","COL_Country")
+
+# Pour LR-WIOD
+TabPassGEO_FIG<-TabPassGEO[,c("WIOD16_CODE","ISO3_CODE_Official")]  
+TabPassGEO_FIG<-setDT(TabPassGEO_FIG)
+Interm2_LRWIOD<-na.omit(Interm_LRWIOD[TabPassGEO_FIG,on=.(row_country=WIOD16_CODE)])
+Interm2_LRWIOD<-Interm2_LRWIOD[,row_country:=NULL]
+setnames(Interm2_LRWIOD,"ISO3_CODE_Official","row_country")
+Interm2_LRWIOD<-na.omit(Interm2_LRWIOD[TabPassGEO_FIG,on=.(col_country=WIOD16_CODE)])
+Interm2_LRWIOD<-Interm2_LRWIOD[,col_country:=NULL]
+setnames(Interm2_LRWIOD,"ISO3_CODE_Official","col_country")
+
+# On réattribue les 2 au normal...
+Interm_FIG<-Interm2_FIG
+Interm_WIOD<-Interm2_WIOD
+Interm_LRWIOD<-Interm2_LRWIOD
+
+
+### Retraitement/uniformisation des noms de variables
+
+setnames(Interm_FIG, "Contry_Lig", "Lig_Country")
+setnames(Interm_FIG, "Contry_Col", "Col_Country")
+setnames(Interm_FIG, "PR_Lig", "Lig_Indus")
+setnames(Interm_FIG, "PR_Col", "Col_Indus")
+setnames(Interm_FIG, "annee", "year")
+
+setnames(Interm_WIOD, "LIG_Country", "Lig_Country")
+setnames(Interm_WIOD, "COL_Country", "Col_Country")
+setnames(Interm_WIOD, "LIG_Indus", "Lig_Indus")
+setnames(Interm_WIOD, "COL_Indus", "Col_Indus")
+setnames(Interm_WIOD, "Year", "year")
+
+setnames(Interm_LRWIOD, "row_country", "Lig_Country")
+setnames(Interm_LRWIOD, "col_country", "Col_Country")
+setnames(Interm_LRWIOD, "row_isic3", "Lig_Indus")
+setnames(Interm_LRWIOD, "col_isic3", "Col_Indus")
+
+
+# Suppression des libellés de WIOD qui alourdissent bcp le fichier
+Interm_WIOD[,c("LIG_IndustryDescription","LIG_Indus_num","COL_Indus_num"):=NULL]
+Interm_LRWIOD[,c("row_id","col_id"):=NULL]
+
+### Enregistrement des tables normalisées ( 'BDn' )
+# Enregistrement WIOD
+saveRDS(Interm_WIOD,"Sorties/BDn_WIOD.rds")
+BDn_WIOD_tab<-dcast(Interm_WIOD, Lig_Country + Lig_Indus + Col_Country + Col_Indus ~ year, value.var = "value") # Mise en format tab avec années en colonne pour limiter le nombre de lignes de la base
+saveRDS(BDn_WIOD_tab,"Sorties/BDn_WIOD_tab.rds")
+
+# Enregistrement LR-WIOD
+saveRDS(Interm_LRWIOD,"Sorties/BDn_LR_WIOD.rds")
+BDn_LR_WIOD_tab<-dcast(Interm_LRWIOD, Lig_Country + Lig_Indus + Col_Country + Col_Indus ~ year, value.var = "value") # Mise en format tab avec années en colonne pour limiterle nombre de lignes de la base
+saveRDS(BDn_LR_WIOD_tab,"Sorties/BDn_LR_WIOD_tab.rds")
+
+# Enregistrement FIGARO
+saveRDS(Interm_FIG,"Sorties/BDn_FIG.rds")
+BDn_FIG_tab<-dcast(Interm_FIG, Lig_Country + Lig_Indus + Col_Country + Col_Indus ~ year, value.var = "value") # Mise en format tab avec années en colonne pour limiterle nombre de lignes de la base
+saveRDS(BDn_FIG_tab,"Sorties/BDn_FIG_tab.rds")
+
+
+```
+
+
+OLD OLD OLD : Plus forcément d'actualité si les ajustements ont déjà été faits !!!
+Contrôles sur les tables normalisées pour vérifier qu'il ne manque rien à ce niveau, avant agrégation type MRIO-ECOLE
+```{r}
+# Chargement des bases
+BDn_FIG_tab<-readRDS("Sorties/BDn_FIG_tab.rds")
+BDn_LR_WIOD_tab<-readRDS("Sorties/BDn_LR_WIOD_tab.rds")
+BDn_WIOD_tab<-readRDS("Sorties/BDn_WIOD_tab.rds")
+
+# Y a t'il la prod (GO) dans WIOD et LR-WIOD ?
+
+# FIGARO 22 : pas de prod au départ (mais recalculée je crois, et on controle les nomenclatures
+print(unique(BDn_FIG_tab[,Col_Country])) # Attention il y a la Prod ici (pour le croisement avec col_Indus=TOTAL, cf ci-dessous)
+print(unique(BDn_FIG_tab[Col_Country=="PROD",]))
+print(unique(BDn_FIG_tab[,Lig_Country])) # Attention il y a FIGW1 (reste du monde) et W2 (pour D1 etc mais ne nous intéresse pas)
+print(unique(BDn_FIG_tab[Lig_Country=="FIGW1",]))
+print(unique(BDn_FIG_tab[Lig_Country=="W2",]))
+print(unique(BDn_FIG_tab[,Lig_Indus])) # Ici on retrouve le D1 etc. mais ça ne nous intéresse pas pour la suite, on accepte de ne pas les conserver.
+print(unique(BDn_FIG_tab[,Col_Indus])) # Attention ici il y a TOTAL qui est a conserver si on veut garder la prod.
+print(unique(BDn_FIG_tab[Col_Indus=="TOTAL",]))
+# Attention nomenclature de pays à 2 chr --> convertir en ISO3
+# Attention : déjà en euro, ne pas le convertir contrairement aux WIOD
+
+# LR-WIOD
+print(unique(BDn_LR_WIOD_tab[,Col_Country])) # Attention a xROW et xTOT (pour croisement avec xGO, xX et xM cf ci-dessous)
+print(unique(BDn_LR_WIOD_tab[Col_Country=="TOTAL",]))
+print(unique(BDn_LR_WIOD_tab[Col_Country=="ROW",]))
+print(unique(BDn_LR_WIOD_tab[,Lig_Country])) # Attention a xROW et xTOT (pour croisement avec xGO uniqueent, le reste ne nous intéresse pas, cf ci-dessous)
+print(unique(BDn_LR_WIOD_tab[Lig_Country=="TOTAL",]))
+print(unique(BDn_LR_WIOD_tab[,Lig_Indus])) # Ici on retrouve le D1 etc. mais nous ne sommes intéressés à conserver que xGO et xVA.
+print(unique(BDn_LR_WIOD_tab[,Col_Indus])) # Attention ici, en plus des 4 composantes de la demande finale, on est intéressés à conserver xM et xX et xGO.
+# Attention nomenclature de pays à 3 chr --> convertir en ISO3 pour être uniforme
+# Attention : en dollar, à convertir contrairement a FIGARO
+
+# WIOD
+print(unique(BDn_WIOD_tab[,Col_Country])) # ATTENTION il manque le reste du monde
+print(unique(BD_WIOD_tab[,LIG_Country])) 
+print(unique(BD_WIOD_tab[,COL_Country])) 
+
+print(unique(BDn_WIOD_tab[,Lig_Country])) # Attention a TOT qui est utile pour le croisement avec VA et GO (cf ci-dessous)
+print(unique(BDn_WIOD_tab[Lig_Country=="TOT",]))
+print(unique(BDn_WIOD_tab[,Lig_Indus])) # Ici on retrouve le D1 etc. mais nous ne sommes intéressés à conserver que GO et VA.
+print(unique(BDn_WIOD_tab[,Col_Indus])) # Rien en plus des 5 composantes de la demande finale.
+# Attention nomenclature de pays à 3 chr --> convertir en ISO3 pour être uniforme
+# Attention : en dollar, à convertir contrairement a FIGARO
+```
+
+
+Chargement des tables d'agrégation et construction d'un MRIO ecole cylindré sur toute la période
+```{r}
+# Chargement des tables
+Interm_LRWIOD<-readRDS("Sorties/BDn_LR_WIOD.rds")
+Interm_WIOD<-readRDS("Sorties/BDn_WIOD.rds")
+Interm_FIG<-readRDS("Sorties/BDn_FIG.rds")
+
+# Chargement des tables de passage
+TabPassGEO<-read_excel(paste0(Path_TabPass,"StructDocs et Tab_Pass_Reindus.xlsx"),sheet = "TabPass_GEO", col_names = TRUE) 
+TabPassIND<-read_excel(paste0(Path_TabPass,"StructDocs et Tab_Pass_Reindus.xlsx"),sheet = "TabPass_PR", col_names = TRUE) 
+TabPassINDlrwiod<-read_excel(paste0(Path_TabPass,"StructDocs et Tab_Pass_Reindus.xlsx"),sheet = "TabPass_PRlrwiod", col_names = TRUE) 
+  # print(unique(Interm_FIG[,c("Col_Indus")]))  # Vérif contenu de la colonne
+
+### Agregation en ECOLE de FIG
+#     ATTENTION : Les codes hors TEI doivent bien être présents dans les tables de passage (ajoutes en dessous des nomenclatures industry) sinon on les perd lors des agrégations
+TabPassGEO_FIG<-unique(TabPassGEO[,c("ISO3_CODE_Official","ICIO21_ECOLE")])  # 1:245
+TabPassGEO_FIG<-setDT(TabPassGEO_FIG)
+TabPassIND_FIG<-unique(TabPassIND[,c("Figaro64ind","ICIO21_ECOLE")])
+TabPassIND_FIG<-setDT(TabPassIND_FIG)
+
+# Agrégation de Lig_Country
+Interm2_FIG<-Interm_FIG[TabPassGEO_FIG,on=.(Lig_Country=ISO3_CODE_Official)]
+  # print(unique(Interm2_FIG[,c("Lig_Country","ICIO21_ECOLE")]))
+Interm2_FIG<-Interm2_FIG[,.(sum(value)), by=c("year","Lig_Indus","Col_Country","Col_Indus","ICIO21_ECOLE")] 
+setnames(Interm2_FIG, "V1", "value")
+setnames(Interm2_FIG, "ICIO21_ECOLE", "Lig_Country")
+
+# Agrégation de Col_Country
+Interm2_FIG<-Interm2_FIG[TabPassGEO_FIG,on=.(Col_Country=ISO3_CODE_Official)]
+Interm2_FIG<-Interm2_FIG[,.(sum(value)), by=c("year","Lig_Indus","Lig_Country","Col_Indus","ICIO21_ECOLE")] 
+setnames(Interm2_FIG, "V1", "value")
+setnames(Interm2_FIG, "ICIO21_ECOLE", "Col_Country")
+
+# Agrégation de Lig_Indus
+Interm2_FIG<-Interm2_FIG[TabPassIND_FIG,on=.(Lig_Indus=Figaro64ind)]
+   # print(unique(Interm2_FIG[,c("Lig_Indus","ICIO21_ECOLE")]))
+Interm2_FIG<-Interm2_FIG[,.(sum(value)), by=c("year","Lig_Country","Col_Country","Col_Indus","ICIO21_ECOLE")] 
+setnames(Interm2_FIG, "V1", "value")
+setnames(Interm2_FIG, "ICIO21_ECOLE", "Lig_Indus")
+
+# Agrégation de Col_Indus
+Interm2_FIG<-Interm2_FIG[TabPassIND_FIG,on=.(Col_Indus=Figaro64ind)]
+Interm2_FIG<-Interm2_FIG[,.(sum(value)), by=c("year","Lig_Country","Col_Country","Lig_Indus","ICIO21_ECOLE")] 
+setnames(Interm2_FIG, "V1", "value")
+setnames(Interm2_FIG, "ICIO21_ECOLE", "Col_Indus")
+
+# Sauvedarde rds de la version ECOLE
+Interm2_FIG<-na.omit(Interm2_FIG)
+saveRDS(Interm2_FIG,"Sorties/BDn_FIG_ECOLE.rds")
+
+
+### Agregation en ECOLE de WIOD
+#     ATTENTION : Les codes hors TEI doivent bien être présents dans les tables de passage (ajoutes en dessous des nomenclatures industry) sinon on les perd lors des agrégations
+TabPassGEO_WIOD<-unique(TabPassGEO[,c("ISO3_CODE_Official","ICIO21_ECOLE")])  # 1:245
+TabPassGEO_WIOD<-setDT(TabPassGEO_WIOD)
+TabPassIND_WIOD<-unique(TabPassIND[,c("WIOD56rel2016_CODE","ICIO21_ECOLE")])
+TabPassIND_WIOD<-setDT(TabPassIND_WIOD)
+
+# Agrégation de Lig_Country
+Interm2_WIOD<-Interm_WIOD[TabPassGEO_WIOD,on=.(Lig_Country=ISO3_CODE_Official)]
+Interm2_WIOD<-Interm2_WIOD[,.(sum(value)), by=c("year","Lig_Indus","Col_Country","Col_Indus","ICIO21_ECOLE")] 
+setnames(Interm2_WIOD, "V1", "value")
+setnames(Interm2_WIOD, "ICIO21_ECOLE", "Lig_Country")
+
+# Agrégation de Col_Country
+Interm2_WIOD<-Interm2_WIOD[TabPassGEO_WIOD,on=.(Col_Country=ISO3_CODE_Official)]
+Interm2_WIOD<-Interm2_WIOD[,.(sum(value)), by=c("year","Lig_Indus","Lig_Country","Col_Indus","ICIO21_ECOLE")] 
+setnames(Interm2_WIOD, "V1", "value")
+setnames(Interm2_WIOD, "ICIO21_ECOLE", "Col_Country")
+
+# Agrégation de Lig_Indus
+Interm2_WIOD<-Interm2_WIOD[TabPassIND_WIOD,on=.(Lig_Indus=WIOD56rel2016_CODE)]
+Interm2_WIOD<-Interm2_WIOD[,.(sum(value)), by=c("year","Lig_Country","Col_Country","Col_Indus","ICIO21_ECOLE")] 
+setnames(Interm2_WIOD, "V1", "value")
+setnames(Interm2_WIOD, "ICIO21_ECOLE", "Lig_Indus")
+
+# Agrégation de Col_Indus
+Interm2_WIOD<-Interm2_WIOD[TabPassIND_WIOD,on=.(Col_Indus=WIOD56rel2016_CODE)]
+Interm2_WIOD<-Interm2_WIOD[,.(sum(value)), by=c("year","Lig_Country","Col_Country","Lig_Indus","ICIO21_ECOLE")] 
+setnames(Interm2_WIOD, "V1", "value")
+setnames(Interm2_WIOD, "ICIO21_ECOLE", "Col_Indus")
+
+# Sauvedarde rds de la version ECOLE
+Interm2_WIOD<-na.omit(Interm2_WIOD)
+saveRDS(Interm2_WIOD,"Sorties/BDn_WIOD_ECOLE.rds")
+
+
+### Agregation en ECOLE de LR-WIOD
+#     ATTENTION : Les codes hors TEI doivent bien être présents dans les tables de passage (ajoutes en dessous des nomenclatures industry) sinon on les perd lors des agrégations
+TabPassGEO_LR_WIOD<-unique(TabPassGEO[,c("ISO3_CODE_Official","ICIO21_ECOLE")])  # 1:245
+TabPassGEO_LR_WIOD<-setDT(TabPassGEO_LR_WIOD)
+TabPassIND_LR_WIOD<-unique(TabPassINDlrwiod[,c("LR_WIOD_Rev1","ICIO21_ECOLE")]) # Attention table spécifique LR-WIOD
+TabPassIND_LR_WIOD<-setDT(TabPassIND_LR_WIOD)
+# Retraitements sur la table de passage IND pour prendre en compte ses spécificités
+# TabPassIND_LR_WIOD[44,1]<-"VIDE"
+# Attention : la nomenclature LR-WIOD étant relativement agrégée, il y a des postes pour lesquels on attribue 2 codes école, notamment pour les services exposés/protégés. Les choix suivants sont faits : LtQ sont plutôt des services abrités ; l60t63 sont plutôt des services exposés ; D21t22 sont plutôt des services exposés
+# TabPassIND_LR_WIOD<-TabPassIND_LR_WIOD[-c(5,19,25),]
+# TabPassIND_LR_WIOD <- TabPassIND_LR_WIOD[ LR_WIOD_Rev1 != "VIDE" ] 
+
+# Agrégation de Lig_Country
+Interm2_LR_WIOD<-Interm_LRWIOD[TabPassGEO_LR_WIOD,on=.(Lig_Country=ISO3_CODE_Official)]
+Interm2_LR_WIOD<-Interm2_LR_WIOD[,.(sum(value)), by=c("year","Lig_Indus","Col_Country","Col_Indus","ICIO21_ECOLE")] 
+setnames(Interm2_LR_WIOD, "V1", "value")
+setnames(Interm2_LR_WIOD, "ICIO21_ECOLE", "Lig_Country")
+
+# Agrégation de Col_Country
+Interm2_LR_WIOD<-Interm2_LR_WIOD[TabPassGEO_LR_WIOD,on=.(Col_Country=ISO3_CODE_Official)]
+Interm2_LR_WIOD<-Interm2_LR_WIOD[,.(sum(value)), by=c("year","Lig_Indus","Lig_Country","Col_Indus","ICIO21_ECOLE")] 
+setnames(Interm2_LR_WIOD, "V1", "value")
+setnames(Interm2_LR_WIOD, "ICIO21_ECOLE", "Col_Country")
+
+# Agrégation de Lig_Indus
+# Interm2_LR_WIOD<-na.omit(Interm2_LR_WIOD)
+Interm2_LR_WIOD<-Interm2_LR_WIOD[TabPassIND_LR_WIOD,on=.(Lig_Indus=LR_WIOD_Rev1)]
+Interm2_LR_WIOD<-Interm2_LR_WIOD[,.(sum(value)), by=c("year","Lig_Country","Col_Country","Col_Indus","ICIO21_ECOLE")] 
+setnames(Interm2_LR_WIOD, "V1", "value")
+setnames(Interm2_LR_WIOD, "ICIO21_ECOLE", "Lig_Indus")
+
+# Agrégation de Col_Indus
+Interm2_LR_WIOD<-Interm2_LR_WIOD[TabPassIND_LR_WIOD,on=.(Col_Indus=LR_WIOD_Rev1)]
+Interm2_LR_WIOD<-Interm2_LR_WIOD[,.(sum(value)), by=c("year","Lig_Country","Col_Country","Lig_Indus","ICIO21_ECOLE")] 
+setnames(Interm2_LR_WIOD, "V1", "value")
+setnames(Interm2_LR_WIOD, "ICIO21_ECOLE", "Col_Indus")
+
+# Sauvedarde rds de la version ECOLE
+   # print(Interm2_LR_WIOD[Col_Country=="TOTAL" &year==1978,])  # Test affichage
+Interm2_LR_WIOD<-na.omit(Interm2_LR_WIOD)
+saveRDS(Interm2_LR_WIOD,"Sorties/BDn_LR_WIOD_ECOLE.rds")
+
+
+### Création de la base commune ECOLE (Merge dans une base unique)
+Interm2_LR_WIOD$MRIO<-"LR_WIOD"
+Interm2_WIOD$MRIO<-"WIOD"
+Interm2_FIG$MRIO<-"FIGARO"
+
+BASE_ECOLE<-rbind(Interm2_LR_WIOD,Interm2_WIOD,Interm2_FIG)
+BASE_ECOLE<-na.omit(BASE_ECOLE)
+saveRDS(BASE_ECOLE,"Sorties/BASE_ECOLE.rds")
+
+```
+
+Controles et mise en forme sur la BASE ECOLE 
+```{r}
+BASE_ECOLE<-readRDS("Sorties/BASE_ECOLE.rds")
+
+### Partie LR_WIOD 1965-2000
+Test_LRWIODbis<-BASE_ECOLE[year==1978,]
+Test_LRWIODbis$PR<-paste0(Test_LRWIODbis$Lig_Country,"_",Test_LRWIODbis$Lig_Indus)
+Test_LRWIODbis$BR<-paste0(Test_LRWIODbis$Col_Country,"_",Test_LRWIODbis$Col_Indus)
+Test_LRWIOD_tab4<-dcast(Test_LRWIODbis, PR ~ BR, value.var = "value") 
+
+### Partie WIOD 2000-2014
+Test_WIODbis<-BASE_ECOLE[year==2007,]
+Test_WIODbis$PR<-paste0(Test_WIODbis$Lig_Country,"_",Test_WIODbis$Lig_Indus)
+Test_WIODbis$BR<-paste0(Test_WIODbis$Col_Country,"_",Test_WIODbis$Col_Indus)
+Test_WIOD_tab4<-dcast(Test_WIODbis, PR ~ BR, value.var = "value")
+
+### Partie FIGARO 2010-2020
+Test_FIGbis<-BASE_ECOLE[year==2016,]
+Test_FIGbis$PR<-paste0(Test_FIGbis$Lig_Country,"_",Test_FIGbis$Lig_Indus)
+Test_FIGbis$BR<-paste0(Test_FIGbis$Col_Country,"_",Test_FIGbis$Col_Indus)
+Test_FIG_tab4<-dcast(Test_FIGbis, PR ~ BR, value.var = "value")
+
+### Partie Hybride WIOD-FIGARO sur période de recoupement 2010-2014
+Test_HYBbis<-BASE_ECOLE[year==2012,]
+Test_HYBbis$PR<-paste0(Test_HYBbis$Lig_Country,"_",Test_HYBbis$Lig_Indus)
+Test_HYBbis$BR<-paste0(Test_HYBbis$Col_Country,"_",Test_HYBbis$Col_Indus)
+Test_HYB_tab4<-dcast(Test_HYBbis, MRIO + PR ~ BR, value.var = "value")
+Test_HYB_tab4<-GereInfNA(Test_HYB_tab4)
+
+### Exports en XLS pour analyse
+write.xlsx(Test_LRWIOD_tab4, paste0(PathS,"Controles_MRIO_ECOLE.xlsx"), sheetName = "LR_WIOD_1978", col.names = TRUE, row.names = TRUE)
+write.xlsx(Test_WIOD_tab4, paste0(PathS,"Controles_MRIO_ECOLE.xlsx"), sheetName = "WIOD_2007", col.names = TRUE, row.names = TRUE, append=TRUE)
+write.xlsx(Test_FIG_tab4, paste0(PathS,"Controles_MRIO_ECOLE.xlsx"), sheetName = "FIGARO_2016", col.names = TRUE, row.names = TRUE, append=TRUE)
+write.xlsx(Test_HYB_tab4, paste0(PathS,"Controles_MRIO_ECOLE.xlsx"), sheetName = "HYBRIDE_2012", col.names = TRUE, row.names = TRUE, append=TRUE)
+
+#######################
+### Checks
+
+# Checks LR-WIOD
+
+Interm_LRWIOD<-readRDS("Sorties/BDn_LR_WIOD.rds")
+Test_Tax_Less_subs<-Interm_LRWIOD[Col_Country== "FRA" & Col_Indus %in% c("C","D23","E") & Lig_Indus=="xTXSP", ]
+Test_Tax_Less_subs<-Interm_LRWIOD[Col_Country== "FRA" & Col_Indus %in% c("C","D23","E") & Lig_Country=="TOTAL", ] # piste xMRG_int
+Test_Tax_Less_subs<-Interm_LRWIOD[Col_Country== "FRA" & Col_Indus %in% c("C","D23","E") & Lig_Indus=="xMRG_int", ] # Ce n'est pas ça...
+print(sum(Test_Tax_Less_subs$value))
+    # Resultat : tout est à 0 sur Lig_Indus=="xTXSP"
+Prod_LRWIOD_enrj_chn<-Interm_LRWIOD[year==1978 & Lig_Country=="CHN" & Lig_Indus %in% c("C","D23","E") & Col_Indus=="xGO", ] 
+print(paste0("Valeur de la prod xGO initial : ",sum(Prod_LRWIOD_enrj_chn$value)))
+Prod_LRWIOD_enrj_chn2<-Interm_LRWIOD[year==1978 & Lig_Country=="CHN" & Lig_Indus %in% c("C","D23","E") & Col_Indus!="xGO" & Col_Indus!="xX" & Col_Indus!="xM", ] 
+print(paste0("Valeur de la prod calculée sur la base initiale : ",sum(Prod_LRWIOD_enrj_chn2$value)))
+Prod_LRWIODecole_enrj_chn<-BASE_ECOLE[year==1978 & Lig_Country=="CHN" & Lig_Indus=="ENRJ" & Col_Indus=="xGO", ] 
+print(paste0("Valeur de la prod xGO initial : ",sum(Prod_LRWIODecole_enrj_chn$value)))
+Prod_LRWIODecole_enrj_chn2<-BASE_ECOLE[year==1978 & Lig_Country=="CHN" & Lig_Indus=="ENRJ" & Col_Indus!="xGO" & Col_Indus!="xX" & Col_Indus!="xM", ] 
+print(paste0("Valeur de la prod calculée sur la base initiale : ",sum(Prod_LRWIODecole_enrj_chn2$value)))
+
+Prod_LRWIODecole_enrj_chn3<-BASE_ECOLE[year==1978 & Lig_Country=="CHN" & Lig_Indus=="ENRJ" , ] 
+
+# Checks WIOD
+
+Interm_WIOD<-readRDS("Sorties/BDn_WIOD.rds")
+
+print(unique(Interm_WIOD[Lig_Country=="TOTAL", Lig_Indus ] ))
+
+Prod_WIOD_enrj_chn<-Interm_WIOD[year==2007 & Col_Country=="CHN" & Col_Indus %in% c("B","C19","D35","E36","E37-E39") & Lig_Country!="TOTAL", ] 
+print(paste0("Valeur de la CI calculée sur la base initiale : ",sum(Prod_WIOD_enrj_chn$value)))
+Prod_WIOD_enrj_chn2<-Interm_WIOD[year==2007 & Col_Country=="CHN" & Col_Indus %in% c("B","C19","D35","E36","E37-E39") & Lig_Indus=="VA", ] 
+print(paste0("Valeur de la VA directement présente dans la base initiale : ",sum(Prod_WIOD_enrj_chn2$value)))
+    # Dans Bse ecole
+Prod_WIODecole_enrj_chn<-BASE_ECOLE[year==2007 & Col_Country=="CHN" & Col_Indus=="ENRJ" & Lig_Country!="TOTAL", ] 
+print(paste0("Valeur de la CI calculée sur la base initiale : ",sum(Prod_WIODecole_enrj_chn$value)))
+Prod_WIODecole_enrj_chn2<-BASE_ECOLE[year==2007 & Col_Country=="CHN" & Col_Indus=="ENRJ" & Lig_Indus=="VA", ] 
+print(paste0("Valeur de la VA directement présente dans la base initiale : ",sum(Prod_WIODecole_enrj_chn2$value)))
+Test_Tax_Less_subs<-Interm_WIOD[year==2007 & Col_Country== "CHN" & Lig_Indus=="TXSP", ] 
+print(sum(Test_Tax_Less_subs$value))
+
+# Checks figaro
+
+Interm_FIG<-readRDS("Sorties/BDn_FIG.rds")
+
+Prod_FIG_enrj_chn<-Interm_FIG[year==2016 & Lig_Country=="CHN" & Lig_Indus %in% c("B","C19","D","E36","E37-E39") & Col_Indus=="TOTAL", ] 
+print(paste0("Valeur de la prod calculée par nous : ",sum(Prod_FIG_enrj_chn$value)))
+Prod_FIG_enrj_chn2<-Interm_FIG[year==2016 & Lig_Country=="CHN" & Lig_Indus %in% c("B","C19","D","E36","E37-E39") & Col_Indus!="TOTAL", ] 
+print(paste0("Valeur de la prod calculée sur la base initiale : ",sum(Prod_FIG_enrj_chn2$value)))
+
+Prod_FIGecole_enrj_chn<-BASE_ECOLE[year==2016 & Lig_Country=="CHN" & Lig_Indus=="ENRJ" & Col_Indus=="TOTAL", ] 
+print(paste0("Valeur de la prod ecole telle que calculée par nous : ",sum(Prod_FIGecole_enrj_chn$value)))
+Prod_FIGecole_enrj_chn2<-BASE_ECOLE[year==2016 & Lig_Country=="CHN" & Lig_Indus=="ENRJ" & Col_Indus!="TOTAL", ] 
+print(paste0("Valeur de la prod calculée sur la base ecole : ",sum(Prod_FIGecole_enrj_chn2$value)))
+
+toto<-BASE_ECOLE[year==2016 & Lig_Country=="CHN" & Lig_Indus=="ENRJ", ] 
+
+Interm_FIG_origin<-readRDS("Sorties/BD_FIG.rds")
+Prod_FIG_enrj_chn2<-Interm_FIG[year==2016 & Lig_Country=="CHN" & Lig_Indus %in% c("B","C19","D","E36","E37-E39") & Col_Indus!="TOTAL", ] 
+print(paste0("Valeur de la prod calculée sur la base initiale normalisée : ",sum(Prod_FIG_enrj_chn2$value)))
+Prod_FIG_enrj_chn3<-Interm_FIG_origin[annee==2016 & Contry_Lig=="CN" & PR_Lig %in% c("B","C19","D","E36","E37-E39") & Contry_Col=="Prod", ] 
+print(paste0("Valeur de la prod calculée sur la base initiale non-normalisée : ",sum(Prod_FIG_enrj_chn3$value)))
+   # Ok pas de soucis identifié au niveau du passage à la normalisation, le pb est bien sur le passage en ECOLE
+print(unique(Interm_FIG_origin[, Contry_Col ] ))
+
+
+#######################################################################################################
+
+### Partie LR_WIOD 1965-2000
+Test_LRWIOD<-BASE_ECOLE[year==1978 & Lig_Country=="FRA",]
+
+# Decomposition complète des colonnes du MRIO
+Test_LRWIODbis<-Test_LRWIOD
+Test_LRWIODbis$PR<-paste0(Test_LRWIODbis$Lig_Country,"_",Test_LRWIODbis$Lig_Indus)
+Test_LRWIODbis$BR<-paste0(Test_LRWIODbis$Col_Country,"_",Test_LRWIODbis$Col_Indus)
+Test_LRWIOD_tab1<-dcast(Test_LRWIODbis, PR ~ BR, value.var = "value") 
+
+# Version plus compacte en sommant sur les pays en colonne
+Test_LRWIODbis<-Test_LRWIOD
+Test_LRWIOD_tab2<-Test_LRWIODbis[,sum(value),by=list(Lig_Country,Lig_Indus,Col_Indus)]
+Test_LRWIOD_tab2$PR<-paste0(Test_LRWIOD_tab2$Lig_Country,"_",Test_LRWIOD_tab2$Lig_Indus)
+Test_LRWIOD_tab2$BR<-paste0(Test_LRWIOD_tab2$Col_Country,"_",Test_LRWIOD_tab2$Col_Indus)
+Test_LRWIOD_tab2<-dcast(Test_LRWIOD_tab2, PR ~ BR, value.var = "V1")
+print(colSums(Test_LRWIOD_tab2[,2:11]))
+print(rowSums(Test_LRWIOD_tab2[,c(2:8,10)])) # Check Equilibre ressources emplois
+
+# Decomposition MRIO complet de 1978 (pas uniquement pour les lignes de la France)
+Test_LRWIODbis<-BASE_ECOLE[year==1978,]
+Test_LRWIODbis$PR<-paste0(Test_LRWIODbis$Lig_Country,"_",Test_LRWIODbis$Lig_Indus)
+Test_LRWIODbis$BR<-paste0(Test_LRWIODbis$Col_Country,"_",Test_LRWIODbis$Col_Indus)
+Test_LRWIOD_tab4<-dcast(Test_LRWIODbis, PR ~ BR, value.var = "value") 
+print(Test_LRWIOD_tab4[14,2:43]-(Test_LRWIOD_tab4[13,2:43]-colSums(Test_LRWIOD_tab4[c(-13,-14),2:43]))) # Check si VA = PROD - CIbranche : marche bof
+
+
+### Partie WIOD 2000-2014
+Test_WIOD<-BASE_ECOLE[year==2007 & Lig_Country=="FRA",]
+
+# Decomposition complète des colonnes du MRIO
+Test_WIODbis<-Test_WIOD
+Test_WIODbis$PR<-paste0(Test_WIODbis$Lig_Country,"_",Test_WIODbis$Lig_Indus)
+Test_WIODbis$BR<-paste0(Test_WIODbis$Col_Country,"_",Test_WIODbis$Col_Indus)
+Test_WIOD_tab1<-dcast(Test_WIODbis, PR ~ BR, value.var = "value") 
+
+# Version plus compacte en sommant sur les pays en colonne                                                         ICI probleme de _
+Test_WIODbis<-Test_WIOD
+Test_WIOD_tab2<-Test_WIODbis[,sum(value),by=list(Lig_Country,Lig_Indus,Col_Indus)]
+Test_WIOD_tab2$PR<-paste0(Test_WIOD_tab2$Lig_Country,"_",Test_WIOD_tab2$Lig_Indus)
+Test_WIOD_tab2$BR<-paste0(Test_WIOD_tab2$Col_Country,"_",Test_WIOD_tab2$Col_Indus)
+Test_WIOD_tab2<-dcast(Test_WIOD_tab2, PR ~ BR, value.var = "V1")
+print(colSums(Test_WIOD_tab2[,2:10]))
+
+# Decomposition MRIO complet de 2007 (pas uniquement pour les lignes de la France)
+Test_WIODbis<-BASE_ECOLE[year==2007,]
+Test_WIODbis$PR<-paste0(Test_WIODbis$Lig_Country,"_",Test_WIODbis$Lig_Indus)
+Test_WIODbis$BR<-paste0(Test_WIODbis$Col_Country,"_",Test_WIODbis$Col_Indus)
+Test_WIOD_tab4<-dcast(Test_WIODbis, PR ~ BR, value.var = "value") 
+print(Test_WIOD_tab4[14,2:43]-(Test_LRWIOD_tab4[13,2:43]-colSums(Test_LRWIOD_tab4[c(-13,-14),2:43]))) # Check si VA = PROD - CIbranche : marche bof
+
+# Recalcul de la production
+Test_WIODbis<-Test_WIOD
+Test_WIOD_tab3<-Test_WIODbis[,sum(value),by=list(Lig_Indus)] # Directement égal à la somme des colonnes 
+print(colSums(Test_WIOD_tab3[,2]))
+
+
+### Partie FIGARO 2010-2020
+Test_FIG<-BASE_ECOLE[year==2016 & Lig_Country=="FRA",]
+
+# Decomposition complète des colonnes du MRIO
+Test_FIGbis<-Test_FIG
+Test_FIGbis$PR<-paste0(Test_FIGbis$Lig_Country,"_",Test_FIGbis$Lig_Indus)
+Test_FIGbis$BR<-paste0(Test_FIGbis$Col_Country,"_",Test_FIGbis$Col_Indus)
+Test_FIG_tab1<-dcast(Test_FIGbis, PR ~ BR, value.var = "value") 
+
+# Version plus compacte en sommant sur les pays en colonne
+Test_FIGbis<-Test_FIG
+Test_FIG_tab2<-Test_FIGbis[,sum(value),by=list(Lig_Country,Lig_Indus,Col_Indus)]
+Test_FIG_tab2$PR<-paste0(Test_FIG_tab2$Lig_Country,"_",Test_FIG_tab2$Lig_Indus)
+Test_FIG_tab2$BR<-paste0(Test_FIG_tab2$Col_Country,"_",Test_FIG_tab2$Col_Indus)
+Test_FIG_tab2<-dcast(Test_FIG_tab2, PR ~ BR, value.var = "V1")
+print(colSums(Test_FIG_tab2[,2:10]))
+
+# Recalcul de la production
+Test_FIGbis<-Test_FIG
+Test_FIG_tab3<-Test_FIGbis[,sum(value),by=list(Lig_Indus)] # Directement égal à la somme des colonnes 
+print(colSums(Test_FIG_tab3[,2]))
+
+
+
+### Partie Hybride WIOD-FIGARO sur période de recoupement 2010-2014
+Test_HYB<-BASE_ECOLE[year==2012 & Lig_Country=="FRA",]
+
+# Decomposition complète des colonnes du MRIO
+Test_HYBbis<-Test_HYB
+Test_HYBbis$PR<-paste0(Test_HYBbis$Lig_Country,"_",Test_HYBbis$Lig_Indus)
+Test_HYBbis$BR<-paste0(Test_HYBbis$Col_Country,"_",Test_HYBbis$Col_Indus)
+Test_HYB_tab1<-dcast(Test_HYBbis, MRIO + PR ~ BR, value.var = "value") 
+
+# Version plus compacte en sommant sur les pays en colonne
+Test_HYBbis<-Test_HYB
+Test_HYB_tab2<-Test_HYBbis[,sum(value),by=list(Lig_Country,Lig_Indus,Col_Indus,MRIO)]
+Test_HYB_tab2$PR<-paste0(Test_HYB_tab2$Lig_Country,"_",Test_HYB_tab2$Lig_Indus)
+Test_HYB_tab2$BR<-paste0(Test_HYB_tab2$Col_Country,"_",Test_HYB_tab2$Col_Indus)
+Test_HYB_tab2<-dcast(Test_HYB_tab2, MRIO + PR ~ BR, value.var = "V1")
+print(colSums(Test_HYB_tab2[,3:16],na.rm=T))
+
+# Recalcul de la production
+Test_HYBbis<-Test_HYB
+Test_HYB_tab3<-Test_HYBbis[,sum(value),by=list(MRIO,Lig_Indus)] # Directement égal à la somme des colonnes 
+print(colSums(Test_HYB_tab3[,2]))
+
+
+
+##############################################################################
+## Contrôle du passage de nomenclature en 2000
+Test_TS<-BASE_ECOLE[Lig_Country=="FRA" & MRIO !="FIGARO",]
+Test_TS<-AjoutPRBR(Test_TS)
+Test_TS_tab<-dcast(Test_TS, PR + BR ~ year + MRIO, value.var = "value")
+
+plot(t(Test_TS_tab[1,3:53]))
+plot(t(Test_TS_tab[5,3:53]))
+plot(t(Test_TS_tab[144,3:53]))
+
+```
+
+
+A17 : Construction d'un MRIO A17 cylindré sur toute la période, y compris par pays
+```{r}
+# Chargement des tables
+Interm_LRWIOD<-readRDS("Sorties/BDn_LR_WIOD.rds")
+Interm_WIOD<-readRDS("Sorties/BDn_WIOD.rds")
+Interm_FIG<-readRDS("Sorties/BDn_FIG.rds")
+
+# Chargement des tables de passage
+TabPassGEO<-read_excel(paste0(Path_TabPass,"StructDocs et Tab_Pass_Reindus.xlsx"),sheet = "TabPass_GEO", col_names = TRUE) 
+TabPassIND<-read_excel(paste0(Path_TabPass,"StructDocs et Tab_Pass_Reindus.xlsx"),sheet = "TabPass_PR", col_names = TRUE) 
+TabPassINDlrwiod<-read_excel(paste0(Path_TabPass,"StructDocs et Tab_Pass_Reindus.xlsx"),sheet = "TabPass_PRlrwiod", col_names = TRUE) 
+  # print(unique(Interm_FIG[,c("Col_Indus")]))  # Vérif contenu de la colonne
+
+### Agregation en A17 de FIG
+#     ATTENTION : Les codes hors TEI doivent bien être présents dans les tables de passage (ajoutes en dessous des nomenclatures industry) sinon on les perd lors des agrégations
+TabPassGEO_FIG<-unique(TabPassGEO[,c("ISO3_CODE_Official","COMMUN_PROJET_REINDUS")])  # 1:245
+TabPassGEO_FIG<-setDT(TabPassGEO_FIG)
+TabPassIND_FIG<-unique(TabPassIND[,c("Figaro64ind","A17")])
+TabPassIND_FIG<-setDT(TabPassIND_FIG)
+
+# Agrégation de Lig_Country
+Interm2_FIG<-Interm_FIG[TabPassGEO_FIG,on=.(Lig_Country=ISO3_CODE_Official)]
+Interm2_FIG<-Interm2_FIG[,.(sum(value)), by=c("year","Lig_Indus","Col_Country","Col_Indus","COMMUN_PROJET_REINDUS")] 
+setnames(Interm2_FIG, "V1", "value")
+setnames(Interm2_FIG, "COMMUN_PROJET_REINDUS", "Lig_Country")
+
+# Agrégation de Col_Country
+Interm2_FIG<-Interm2_FIG[TabPassGEO_FIG,on=.(Col_Country=ISO3_CODE_Official)]
+Interm2_FIG<-Interm2_FIG[,.(sum(value)), by=c("year","Lig_Indus","Lig_Country","Col_Indus","COMMUN_PROJET_REINDUS")] 
+setnames(Interm2_FIG, "V1", "value")
+setnames(Interm2_FIG, "COMMUN_PROJET_REINDUS", "Col_Country")
+
+# Agrégation de Lig_Indus
+Interm2_FIG<-Interm2_FIG[TabPassIND_FIG,on=.(Lig_Indus=Figaro64ind)]
+Interm2_FIG<-Interm2_FIG[,.(sum(value)), by=c("year","Lig_Country","Col_Country","Col_Indus","A17")] 
+setnames(Interm2_FIG, "V1", "value")
+setnames(Interm2_FIG, "A17", "Lig_Indus")
+
+# Agrégation de Col_Indus
+Interm2_FIG<-Interm2_FIG[TabPassIND_FIG,on=.(Col_Indus=Figaro64ind)]
+Interm2_FIG<-Interm2_FIG[,.(sum(value)), by=c("year","Lig_Country","Col_Country","Lig_Indus","A17")] 
+setnames(Interm2_FIG, "V1", "value")
+setnames(Interm2_FIG, "A17", "Col_Indus")
+
+# Sauvedarde rds de la version A17
+Interm2_FIG<-na.omit(Interm2_FIG)
+saveRDS(Interm2_FIG,"Sorties/BDn_FIG_A17.rds")
+
+
+### Agregation en A17 de WIOD
+#     ATTENTION : Les codes hors TEI doivent bien être présents dans les tables de passage (ajoutes en dessous des nomenclatures industry) sinon on les perd lors des agrégations
+TabPassGEO_WIOD<-unique(TabPassGEO[,c("ISO3_CODE_Official","COMMUN_PROJET_REINDUS")])  # 1:245
+TabPassGEO_WIOD<-setDT(TabPassGEO_WIOD)
+TabPassIND_WIOD<-unique(TabPassIND[,c("WIOD56rel2016_CODE","A17")])
+TabPassIND_WIOD<-setDT(TabPassIND_WIOD)
+TabPassGEO_WIOD<-TabPassGEO_WIOD[-c(248),] # Pour enlever le xTOT sinon 2 attributions pour TOTAL
+
+# Agrégation de Lig_Country
+Interm2_WIOD<-Interm_WIOD[TabPassGEO_WIOD,on=.(Lig_Country=ISO3_CODE_Official)]
+Interm2_WIOD<-Interm2_WIOD[,.(sum(value)), by=c("year","Lig_Indus","Col_Country","Col_Indus","COMMUN_PROJET_REINDUS")] 
+setnames(Interm2_WIOD, "V1", "value")
+setnames(Interm2_WIOD, "COMMUN_PROJET_REINDUS", "Lig_Country")
+
+# Agrégation de Col_Country
+Interm2_WIOD<-Interm2_WIOD[TabPassGEO_WIOD,on=.(Col_Country=ISO3_CODE_Official)]
+Interm2_WIOD<-Interm2_WIOD[,.(sum(value)), by=c("year","Lig_Indus","Lig_Country","Col_Indus","COMMUN_PROJET_REINDUS")] 
+setnames(Interm2_WIOD, "V1", "value")
+setnames(Interm2_WIOD, "COMMUN_PROJET_REINDUS", "Col_Country")
+
+# Agrégation de Lig_Indus
+Interm2_WIOD<-Interm2_WIOD[TabPassIND_WIOD,on=.(Lig_Indus=WIOD56rel2016_CODE)]
+Interm2_WIOD<-Interm2_WIOD[,.(sum(value)), by=c("year","Lig_Country","Col_Country","Col_Indus","A17")] 
+setnames(Interm2_WIOD, "V1", "value")
+setnames(Interm2_WIOD, "A17", "Lig_Indus")
+
+# Agrégation de Col_Indus
+Interm2_WIOD<-Interm2_WIOD[TabPassIND_WIOD,on=.(Col_Indus=WIOD56rel2016_CODE)]
+Interm2_WIOD<-Interm2_WIOD[,.(sum(value)), by=c("year","Lig_Country","Col_Country","Lig_Indus","A17")] 
+setnames(Interm2_WIOD, "V1", "value")
+setnames(Interm2_WIOD, "A17", "Col_Indus")
+
+# Sauvedarde rds de la version A17
+Interm2_WIOD<-na.omit(Interm2_WIOD)
+saveRDS(Interm2_WIOD,"Sorties/BDn_WIOD_A17.rds")
+
+
+### Agregation en A17 de LR-WIOD
+#     ATTENTION : Les codes hors TEI doivent bien être présents dans les tables de passage (ajoutes en dessous des nomenclatures industry) sinon on les perd lors des agrégations
+TabPassGEO_LR_WIOD<-unique(TabPassGEO[,c("ISO3_CODE_Official","COMMUN_PROJET_REINDUS")])  # 1:245
+TabPassGEO_LR_WIOD<-setDT(TabPassGEO_LR_WIOD)
+TabPassIND_LR_WIOD<-unique(TabPassINDlrwiod[,c("LR_WIOD_Rev1","A17")]) # Attention table spécifique LR-WIOD
+TabPassIND_LR_WIOD<-setDT(TabPassIND_LR_WIOD)
+TabPassGEO_LR_WIOD<-TabPassGEO_LR_WIOD[-c(248),] # Pour enlever le xTOT sinon 2 attributions pour TOTAL
+# Retraitements sur la table de passage IND pour prendre en compte ses spécificités
+# TabPassIND_LR_WIOD[44,1]<-"VIDE"
+# Attention : la nomenclature LR-WIOD étant relativement agrégée, il y a des postes pour lesquels on attribue 2 codes école, notamment pour les services exposés/protégés. Les choix suivants sont faits : LtQ sont plutôt des services abrités ; l60t63 sont plutôt des services exposés ; D21t22 sont plutôt des services exposés
+# TabPassIND_LR_WIOD<-TabPassIND_LR_WIOD[-c(5,19,25),]
+# TabPassIND_LR_WIOD <- TabPassIND_LR_WIOD[ LR_WIOD_Rev1 != "VIDE" ] 
+
+# Agrégation de Lig_Country
+Interm2_LR_WIOD<-Interm_LRWIOD[TabPassGEO_LR_WIOD,on=.(Lig_Country=ISO3_CODE_Official)]
+Interm2_LR_WIOD<-Interm2_LR_WIOD[,.(sum(value)), by=c("year","Lig_Indus","Col_Country","Col_Indus","COMMUN_PROJET_REINDUS")] 
+setnames(Interm2_LR_WIOD, "V1", "value")
+setnames(Interm2_LR_WIOD, "COMMUN_PROJET_REINDUS", "Lig_Country")
+
+# Agrégation de Col_Country
+Interm2_LR_WIOD<-Interm2_LR_WIOD[TabPassGEO_LR_WIOD,on=.(Col_Country=ISO3_CODE_Official)]
+Interm2_LR_WIOD<-Interm2_LR_WIOD[,.(sum(value)), by=c("year","Lig_Indus","Lig_Country","Col_Indus","COMMUN_PROJET_REINDUS")] 
+setnames(Interm2_LR_WIOD, "V1", "value")
+setnames(Interm2_LR_WIOD, "COMMUN_PROJET_REINDUS", "Col_Country")
+
+# Agrégation de Lig_Indus
+# Interm2_LR_WIOD<-na.omit(Interm2_LR_WIOD)
+Interm2_LR_WIOD<-Interm2_LR_WIOD[TabPassIND_LR_WIOD,on=.(Lig_Indus=LR_WIOD_Rev1)]
+Interm2_LR_WIOD<-Interm2_LR_WIOD[,.(sum(value)), by=c("year","Lig_Country","Col_Country","Col_Indus","A17")] 
+setnames(Interm2_LR_WIOD, "V1", "value")
+setnames(Interm2_LR_WIOD, "A17", "Lig_Indus")
+
+# Agrégation de Col_Indus
+Interm2_LR_WIOD<-Interm2_LR_WIOD[TabPassIND_LR_WIOD,on=.(Col_Indus=LR_WIOD_Rev1)]
+Interm2_LR_WIOD<-Interm2_LR_WIOD[,.(sum(value)), by=c("year","Lig_Country","Col_Country","Lig_Indus","A17")] 
+setnames(Interm2_LR_WIOD, "V1", "value")
+setnames(Interm2_LR_WIOD, "A17", "Col_Indus")
+
+# Sauvedarde rds de la version A17
+   # print(Interm2_LR_WIOD[Col_Country=="TOTAL" &year==1978,])  # Test affichage
+Interm2_LR_WIOD<-na.omit(Interm2_LR_WIOD)
+saveRDS(Interm2_LR_WIOD,"Sorties/BDn_LR_WIOD_A17.rds")
+
+
+### Création de la base commune ECOLE (Merge dans une base unique)
+Interm2_LR_WIOD$MRIO<-"LR_WIOD"
+Interm2_WIOD$MRIO<-"WIOD"
+Interm2_FIG$MRIO<-"FIGARO"
+
+BASE_A17<-rbind(Interm2_LR_WIOD,Interm2_WIOD,Interm2_FIG)
+BASE_A17<-na.omit(BASE_A17)
+saveRDS(BASE_A17,"Sorties/BASE_A17.rds")
+
+
+```
+
+
+Test des formules (notamment extraction des composantes du MRIO Ecole + HRM etc.)
+
+```{r}
+# Chargement des bases
+BASE_ECOLE<-readRDS("Sorties/BASE_ECOLE.rds")
+BASE_A17<-readRDS("Sorties/BASE_A17.rds")
+Interm_LRWIOD<-readRDS("Sorties/BDn_LR_WIOD.rds")
+Interm_WIOD<-readRDS("Sorties/BDn_WIOD.rds")
+Interm_FIG<-readRDS("Sorties/BDn_FIG.rds")
+
+# Recuperation des données ecole de 1990 pour la France
+Ecole_TEI_1990<-CompoEcole(BASE_ECOLE,"TEI",date=1990,country="FRA")
+Ecole_TEI_1990_tab<-CompoEcole(BASE_ECOLE,"TEI",date=1990,country="FRA",OptTab=TRUE)
+Ecole_TEIfull_1990<-CompoEcole(BASE_ECOLE,"TEI",date=1990)
+Ecole_TEIfull_1990_tab<-CompoEcole(BASE_ECOLE,"TEI",date=1990,OptTab=TRUE)
+Ecole_TEIfull<-CompoEcole(BASE_ECOLE,"TEI")
+
+Ecole_FD_1990<-CompoEcole(BASE_ECOLE,"DF",date=1990,country="FRA")
+Ecole_FD_1990_tab<-CompoEcole(BASE_ECOLE,"DF",date=1990,country="FRA",OptTab=TRUE)
+Ecole_FDfull_1990<-CompoEcole(BASE_ECOLE,"DF",date=1990)
+
+Ecole_PROD_1990<-CompoEcole(BASE_ECOLE,"PROD",date=1990,country="FRA")
+Ecole_PRODfull_1990<-CompoEcole(BASE_ECOLE,"PROD",date=1990)
+
+Ecole_VA_1990<-CompoEcole(BASE_ECOLE,"VA",date=1990,country="FRA")
+Ecole_VAfull_1990<-CompoEcole(BASE_ECOLE,"VA",date=1990)
+
+Ecole_B_1990<-CompoECOLEouA17(BASE_ECOLE,"B",date=1990,OptTab=TRUE)
+Ecole_L_1990<-CompoECOLEouA17(BASE_ECOLE,"L",date=1990)
+Ecole_InvB_1990<-CompoECOLEouA17(BASE_ECOLE,"invB",date=1990)
+Ecole_Bonus_1990<-CompoECOLEouA17(BASE_ECOLE,"OptFullOptionsBonus",date=1990)
+
+# Tests plus problématiques : années de recouvrement par exemple
+Ecole_FULL_2012_FRA<-CompoEcole(BASE_ECOLE,"OptFullOptions",date=2012,country="FRA")
+Vue_DF<-dcast(Ecole_FULL_2012_FRA[["DF"]], year + Lig_Country + Lig_Indus + Col_Country + Col_Indus ~ MRIO, value.var = "value") # Mise en format tab 
+
+print(CompoEcole(BASE_ECOLE,"PROD",date=1990))
+
+Ecole_FULL_1990_FRA<-CompoEcole(BASE_ECOLE,"OptFullOptions",date=1990,country="FRA")
+Ecole_FULL_1990<-CompoEcole(BASE_ECOLE,"OptFullOptions",date=1990)
+exportListFullOptions(Ecole_FULL_1990_FRA,"Sorties/Test_1990_FRA")  
+exportListFullOptions(Ecole_FULL_1990,"Sorties/Test_1990") 
+
+### Tests nouvelle fonction A17 et ECOLE
+Ecole_FULL_1990_FRA<-CompoECOLEouA17(BASE_ECOLE,"OptFullOptions",date=1990,country="FRA")
+LRWIOD_FULL_1990_FRA<-CompoECOLEouA17(BASE_A17,"OptFullOptions",date=1990,country="FRA")
+
+
+### tests sur vrai MRIO et MRIO ecoles : Comparer les 3 niveaux pour vérifier la cohérence
+
+LRWIOD_FULL_1990_FRA_A17<-CompoECOLEouA17(BASE_A17,"OptFullOptions",date=1990,country="FRA")
+exportListFullOptions(LRWIOD_FULL_1990_FRA_A17,"Sorties/Test_1990_FRA_A17")  
+
+LRWIOD_FULL_1990_FRA_ECOLE<-CompoECOLEouA17(BASE_ECOLE,"OptFullOptions",date=1990,country="FRA")
+exportListFullOptions(LRWIOD_FULL_1990_FRA_ECOLE,"Sorties/Test_1990_FRA_ECOLE") 
+
+LRWIOD_FULL_1990_ALL<-CompoECOLEouA17(BASE_A17,"OptFullOptions",date=1990)
+saveRDS(LRWIOD_FULL_1990_ALL,"Sorties/LRWIOD_FULL_1990.rds")
+#exportListFullOptions(LRWIOD_FULL_1990_ALL,"Sorties/Test_1990_ALL") 
+
+FIG_FULL_2017_FRA_ECOLE<-CompoECOLEouA17(BASE_ECOLE,"OptFullOptions",date=2017,country="FRA")
+exportListFullOptions(FIG_FULL_2017_FRA_ECOLE,"Sorties/Test_2017_FRA_ECOLE") 
+
+FIG_FULL_2017_FRA_A17<-CompoECOLEouA17(BASE_A17,"OptFullOptions",date=2017,country="FRA")
+exportListFullOptions(FIG_FULL_2017_FRA_A17,"Sorties/Test_2017_FRA_A17")  
+
+WIOD_FULL_2007_FRA_ECOLE<-CompoECOLEouA17(BASE_ECOLE,"OptFullOptions",date=2007,country="FRA")
+exportListFullOptions(WIOD_FULL_2007_FRA_ECOLE,"Sorties/Test_2007_FRA_ECOLE")  
+
+WIOD_FULL_2007_FRA_A17<-CompoECOLEouA17(BASE_A17,"OptFullOptions",date=2007,country="FRA")
+exportListFullOptions(WIOD_FULL_2007_FRA_A17,"Sorties/Test_2007_FRA_A17")  
+
+HYB_FULL_2012_FRA<-CompoECOLEouA17(BASE_A17,"OptFullOptions",date=2012,country="FRA")
+exportListFullOptions(HYB_FULL_2012_FRA,"Sorties/Test_2012_FRA_HYBFIG")  
+
+VRAI_LRWIOD_FULL_1990_FRA<-CompoMRIO(Interm_LRWIOD,"OptFullOptions",date=1990,country="FRA")
+exportListFullOptions(VRAI_LRWIOD_FULL_1990_FRA,"Sorties/VRAI_1990LRWIOD_FRA")  
+
+VRAI_WIOD_FULL_2007_FRA<-CompoMRIO(Interm_WIOD,"OptFullOptions",date=2007,country="FRA")
+exportListFullOptions(VRAI_WIOD_FULL_2007_FRA,"Sorties/VRAI_2007WIOD_FRA") 
+
+VRAI_FIG_FULL_2017_FRA<-CompoMRIO(Interm_FIG,"OptFullOptions",date=2017,country="FRA")
+exportListFullOptions(VRAI_FIG_FULL_2017_FRA,"Sorties/VRAI_2017FIG_FRA") 
+
+test_VRAI_FIG_A<-CompoMRIO(Interm_FIG,"A",date=2017,OptTab=TRUE)
+test_VRAI_FIG_B<-CompoMRIO(Interm_FIG,"B",date=2017,OptTab=TRUE)
+test_VRAI_FIG_L<-CompoMRIO(Interm_FIG,"L",date=2017)
+test_VRAI_FIG_invB<-CompoMRIO(Interm_FIG,"invB",date=2017)
+test_VRAI_FIG_AvcBonus<-CompoMRIO(Interm_FIG,"OptFullOptionsBonus",date=2017)
+
+#toto<-BASE_A17[year==2017 & Lig_Country=="FRA"& Col_Country=="FRA",]
+#toto<-BASE_A17[year==2017,]
+
+### Test des fonctions
+
+# HRM
+
+#LRWIOD_FULL_1990_ALL<-CompoECOLEouA17(BASE_A17,"OptFullOptions",date=1990)
+toto<-BASE_A17[year==1990,]
+Test_HRM_ecole<-HRM(toto,repat_country="FRA",repat_indus="AZ",repat_pct=0.3,verboseCheck=TRUE)  
+
+toto<-BASE_ECOLE[year==1990,]
+Test_HRM_ecole<-HRM(toto,repat_country="FRA",repat_indus="AGR_INDU",repat_pct=0.3,verboseCheck=TRUE)  
+
+#VRAI_WIOD_FULL_2007_FULL<-CompoMRIO(Interm_WIOD,"OptFullOptions",date=2007)
+toto<-Interm_WIOD[year==2007,]
+Test_HRM_VRAI<-HRM(toto,repat_country="FRA",repat_indus="A01",repat_pct=0.3,verboseCheck=TRUE,OptMRIO=FALSE)  
+
+# HEM
+
+#LRWIOD_FULL_1990_ALL<-CompoECOLEouA17(BASE_A17,"OptFullOptions",date=1990)
+toto<-BASE_A17[year==1990,]
+Test_HEM_ecole<-HEM(toto,extract_country="FRA",extract_indus="AZ",verboseCheck=TRUE) 
+
+
+
+HEM_1<-HEM(BASE_A17,1990,extract_country="FRA",extract_indus="AZ",verboseCheck=TRUE) 
+
+HEM_2<-HEM(BASE_A17,1990,extract_country="FRA",extract_indus="DE",verboseCheck=TRUE) 
+
+HEM_3<-HEM(BASE_A17,1990,extract_country="CHN",extract_indus="DE",verboseCheck=TRUE) 
+
+
+
+toto<-BASE_ECOLE[year==1990,]
+Test_HEM_ecole<-HEM(toto,extract_country="FRA",extract_indus="AGR_INDU",verboseCheck=TRUE) 
+#VRAI_WIOD_FULL_2007_FULL<-CompoMRIO(Interm_WIOD,"OptFullOptions",date=2007)
+toto<-Interm_WIOD[year==2007,]
+Test_HEM_VRAI<-HEM(toto,extract_country="FRA",extract_indus="A01",verboseCheck=TRUE,OptMRIO=FALSE) 
+
+
+LRWIOD_FULL_1990_ALL<-CompoECOLEouA17(BASE_ECOLE,"OptFullOptions",date=1990)
+Test_contenu_VA<-Contenus(LRWIOD_FULL_1990_ALL,typeContenu="VA",MethContenu="MatDF")  # typeContenu=VA;CO2;Emploi   MethContenu=MatDF;DiagDFtot
+toto<-LRWIOD_FULL_1990_ALL[["CI"]]
+toto<-AjoutPRBR(toto)
+toto<-SplitPRBR(toto)
+
+# MADE-IN
+
+LRWIOD_FULL_1990_ALL<-CompoECOLEouA17(BASE_A17,"OptFullOptions",date=1990)
+Test_contenu_VA<-Contenus(LRWIOD_FULL_1990_ALL,typeContenu="VA",MethContenu="MatDF")  # typeContenu=VA;CO2;Emploi   MethContenu=MatDF;DiagDFtot
+Test_MadeIn<-MadeIn(Test_contenu_VA) 
+  
+VRAI_WIOD_FULL_2007_FULL<-CompoMRIO(Interm_WIOD,"OptFullOptions",date=2007)
+Test_contenu_VA_vrai<-Contenus(VRAI_WIOD_FULL_2007_FULL,typeContenu="VA",MethContenu="MatDF")  # typeContenu=VA;CO2;Emploi   MethContenu=MatDF;DiagDFtot
+Test_MadeIn_vrai<-MadeIn(Test_contenu_VA_vrai) 
+
+
+
+### Test fonctions de somme par agrégation
+LRWIOD_FULL_1990_ALL<-CompoECOLEouA17(BASE_A17,"OptFullOptions",date=1990)
+MyDT<-LRWIOD_FULL_1990_ALL[["DF"]]
+DF_SumdeMyDT<-ReqSum(MyDT,list("Col_Indus"),OptMRIO=TRUE)  
+DF_SumdeMyDT2<-ReqSum(MyDT,list("Col_Indus","Lig_Indus"),OptMRIO=TRUE) 
+DF_SumdeMyDT2_struct<-ReqSum(MyDT,list("Col_Indus","Lig_Indus"),OptMRIO=TRUE,OptStruct=TRUE) 
+
+### Graphs Radar
+# https://www.datanovia.com/en/fr/blog/magnifique-graphique-radar-dans-r-avec-les-packages-fmsb-et-ggplot/
+# Données de démonstration
+exam_scores <- data.frame(
+    row.names = c("Student.1", "Student.2", "Student.3"),
+      Biology = c(7.9, 3.9, 9.4),
+      Physics = c(10, 20, 0),
+        Maths = c(3.7, 11.5, 2.5),
+        Sport = c(8.7, 20, 4),
+      English = c(7.9, 7.2, 12.4),
+    Geography = c(6.4, 10.5, 6.5),
+          Art = c(2.4, 0.2, 9.8),
+  Programming = c(0, 0, 20),
+        Music = c(20, 20, 20)
+)
+exam_scores
+# Définir les intervalles des variables : maximum et minimum
+max_min <- data.frame(
+  Biology = c(20, 0), Physics = c(20, 0), Maths = c(20, 0),
+  Sport = c(20, 0), English = c(20, 0), Geography = c(20, 0),
+  Art = c(20, 0), Programming = c(20, 0), Music = c(20, 0)
+)
+rownames(max_min) <- c("Max", "Min")
+
+# Rattacher les plages de variables aux données
+df <- rbind(max_min, exam_scores)
+df
+student1_data <- df[c("Max", "Min", "Student.1"), ]
+radarchart(student1_data)
+
+```
+
+
+
+
+Tests sur les contenus en VA
+```{r}
+# BASE_ECOLE,BASE_A17,Interm_LRWIOD,Interm_WIOD,Interm_FIG
+
+toto_vrai<-ContVAdesExports(Interm_FIG,2017,"FRA",OptMRIO=FALSE)
+
+toto_ecole<-ContVAdesExports(BASE_A17,2012,"AUT",OptMRIO=TRUE)
+
+
+###################################
+
+List_Pays<-unique(BASE_A17[,"Lig_Country"])
+ List_GEO<-c("ABW","AFG","AGO","AIA","ALA","ALB","AND","ARE","ARG","ARM","ASM","ATA","ATF","ATG","AUS","AUT","AZE","BDI","BEL","BEN","BFA","BGD","BGR","BHR","BHS","BIH","BLM","BLR","BLZ","BMU","BOL","BRA","BRB","BRN","BTN","BVT","BWA","CAF","CAN","CCK","CHE","CHL","CHN","CIV","CMR","COD","COG","COK","COL","COM","CPV","CRI","CUB","CXR","CYM","CYP","CZE","DEU","DJI","DMA","DNK","DOM","DZA","ECU","EGY","ERI","ESH","ESP","EST","ETH","FIN","FJI","FLK","FRA","FRO","FSM","GAB","GBR","GEO","GGY","GHA","GIB","GIN","GLP","GMB","GNB","GNQ","GRC","GRD","GRL","GTM","GUF","GUM","GUY","HKG","HMD","HND","HRV","HTI","HUN","IDN","IMN","IND","IOT","IRL","IRN","IRQ","ISL","ISR","ITA","JAM","JEY","JOR","JPN","KAZ","KEN","KGZ","KHM","KIR","KNA","KOR","KWT","LAO","LBN","LBR","LBY","LCA","LIE","LKA","LSO","LTU","LUX","LVA","MAC","MAF","MAR","MCO","MDA","MDG","MDV","MEX","MHL","MKD","MLI","MLT","MMR","MNE","MNG","MNP","MOZ","MRT","MSR","MTQ","MUS","MWI","MYS","MYT","NAM","NCL","NER","NFK","NGA","NIC","NIU","NLD","NOR","NPL","NRU","NZL","OMN","PAK","PAN","PCN","PER","PHL","PLW","PNG","POL","PRI","PRK","PRT","PRY","PSE","PYF","QAT","REU","ROU","RUS","RWA","SAU","SDN","SEN","SGP","SGS","SHN","SJM","SLB","SLE","SLV","SMR","SOM","SPM","SRB","STP","SUR","SVK","SVN","SWE","SWZ","SYC","SYR","TCA","TCD","TGO","THA","TJK","TKL","TKM","TLS","TON","TTO","TUN","TUR","TUV","TWN","TZA","UGA","UKR","UMI","URY","USA","UZB","VAT","VCT","VEN","VGB","VIR","VNM","VUT","WLF","WSM","YEM","ZAF","ZMB","ZWE","ROW","UE_OTHER")
+ List_Pays<-List_Pays[Lig_Country %in% List_GEO,]
+ 
+ print(List_Pays[1,1])
+ print(List_Pays[2,1])
+ Base_Out<-ContVAdesExports(DT=BASE_A17,annee=2007,pays=as.character(List_Pays[1,1]),OptMRIO=TRUE) # initialisation
+ 
+ toto_boucle<-BouclePaysContVAdesExports(BASE_ECOLE,2005,OptMRIO=TRUE)
+ 
+ toto_FullMonty<-BouclePaysEtAnneesContVAdesExports(BASE_ECOLE,2005:2007,OptMRIO=TRUE)  # Reprendre ici pour faire toute la série
+   
+####################################
+
+Base_depart<-CompoMRIO(Interm_LRWIOD,"OptFullOptionsBonus",date=1997)
+
+### Code spour la fonction de calcul des contenus en VA des exports (dixit papier)
+
+# Cadre de départ pour y placer les composantes du calcul (même format que la DF)
+Cadre<-Base_depart[["DF"]]
+Cadre$value<-0
+Cadre<-ReqSum(Cadre,"Col_Indus",OptMRIO = FALSE) # on agrège les composantes de demande finale
+Cadre$Col_Indus<-"TOTDF"  # On requalifie la colonne Col_Indus
+Cadre_tab<-dcast(Cadre, Lig_Country + Lig_Indus ~ Col_Country, value.var = "value") 
+
+# Calcul des exportations du pays FRA
+BaseCIDF<-rbind(Base_depart[["CI"]],Base_depart[["DF"]])
+BaseSelect<-BaseCIDF[Lig_Country=="FRA" & Col_Country!="FRA",]
+BaseSelect<-ReqSum(BaseSelect,c("Col_Country","Col_Indus"),OptMRIO = F) # on agrège les composantes de demande finale
+BaseDom<-BaseSelect
+BaseDom$Col_Country<-"FRA"
+BaseDom$Col_Indus<-"TOTDF"
+
+# Calcul des (en négatif) des exports des autres pays vers FRA
+BaseSelect<-BaseCIDF[Lig_Country!="FRA" & Col_Country=="FRA",]
+BaseSelect<-ReqSum(BaseSelect,c("Col_Indus")) # on agrège les composantes de demande finale
+BaseSelect$value<--BaseSelect$value
+BaseXversDom<-BaseSelect
+BaseXversDom$Col_Country<-BaseXversDom$Lig_Country
+BaseXversDom$Col_Indus<-"TOTDF"
+
+# Rajout des composantes au cadre et agrégation pour intégrer les composantes au cadre
+Cadre$Partie<-"initial"
+BaseDom$Partie<-"BaseDom"
+BaseXversDom$Partie<-"BaseXversDom"
+BaseTot<-rbind(Cadre,BaseDom,BaseXversDom)
+BaseFin<-ReqSum(BaseTot,c("Partie"))
+Cadre<-BaseFin
+Cadre_tab<-dcast(Cadre, Lig_Country + Lig_Indus ~ Col_Country, value.var = "value") 
+
+# Definition des matrices intervenant dans le produit matriciel
+stressor<-as.matrix(Base_depart[["VA"]]$value,drop=FALSE)
+Prod<-as.matrix(Base_depart[["PROD"]]$value,drop=FALSE)
+  Taux_Stressor<-stressor/Prod
+  Taux_Stressor<-as.vector(Taux_Stressor)
+  part1<-diag(Taux_Stressor)
+  part2<-as.matrix(Base_depart[["L"]])
+  part3<-as.matrix(Cadre_tab[,3:ncol(Cadre_tab)])
+  MatContVAExports<-CFPcalculationRCPP(part1,part2,part3)
+  MatContVAExports<-as.data.frame(MatContVAExports)
+  rownames(MatContVAExports)<-paste0(Base_depart[["DF_tab"]]$Lig_Country,"_",Base_depart[["DF_tab"]]$Lig_Indus)
+  colnames(MatContVAExports)<-unique(Base_depart[["DF_tab"]]$Lig_Country)
+  MatContVAExports<-AddRownamesToFirstCol(MatContVAExports)
+  
+MatContVAExports<-setDT(MatContVAExports)
+ComposantesVAinX<-melt(MatContVAExports)  
+setnames(ComposantesVAinX,"joint","PR")
+setnames(ComposantesVAinX,"variable","BR")
+ComposantesVAinX<-SplitPRBR(ComposantesVAinX)
+ComposantesVAinX[,Col_Indus:=NULL]  # pas utile et a vide
+
+DVAiX<-ComposantesVAinX[Lig_Country=="FRA" & Col_Country=="FRA",][,Col_Indus:="TOTAL"][,Compo:="DVAiX"]
+DVAiM<-ComposantesVAinX[Lig_Country=="FRA" & Col_Country!="FRA",][,Col_Indus:="TOTAL"][,Compo:="DVAiM"]
+FVAiX<-ComposantesVAinX[Lig_Country!="FRA" & Col_Country=="FRA",][,Col_Indus:="TOTAL"][,Compo:="FVAiX"]
+FVAiM<-ComposantesVAinX[Lig_Country!="FRA" & Col_Country!="FRA",][,Col_Indus:="TOTAL"][,Compo:="FVAiM"]
+BVAiM<-ComposantesVAinX[Lig_Country!="FRA" & Col_Country!="FRA" & Lig_Country==Col_Country,][,Col_Indus:="TOTAL"][,Compo:="BVAiM"]
+
+DVAiM_PR<-DVAiM[,sum(value),by=Lig_Indus][,Col_Indus:="TOTAL"][,Lig_Indus:="TOTAL"][,Lig_Country:="TOTAL"][,Compo:="DVAiM_PR"]  
+setnames(DVAiM_PR,"V1","value")
+FVAiX_PR<-FVAiX[,sum(value),by=Lig_Country][,Col_Indus:="TOTAL"][,Lig_Indus:="TOTAL"][,Col_Country:="TOTAL"][,Compo:="FVAiX_PR"]
+setnames(FVAiX_PR,"V1","value")
+FVAiM_PR<-FVAiM[,sum(value),by=Lig_Indus][,Col_Indus:="TOTAL"][,Lig_Country:="TOTAL"][,Col_Country:="TOTAL"][,Compo:="FVAiM_PR"]
+setnames(FVAiM_PR,"V1","value")
+BVAiM_PR<-BVAiM[,sum(value),by=Lig_Indus][,Col_Indus:="TOTAL"][,Lig_Country:="TOTAL"][,Col_Country:="TOTAL"][,Compo:="BVAiM_PR"]
+setnames(BVAiM_PR,"V1","value")
+VAXnoguera<-DVAiX # initialise
+VAXnoguera$value<-as.data.frame(DVAiX$value+DVAiM_PR$value,drop=FALSE)
+VAXnoguera<-setDT(VAXnoguera)
+VAXnoguera<-VAXnoguera[,Col_Indus:="TOTAL"][,Compo:="VAXnoguera"]
+
+
+  # Ajout des données d'emportations et de VA  pour dénominateur des ratio
+  BaseCIDF<-rbind(Base_depart[["CI"]],Base_depart[["DF"]])
+  BaseSExport<-BaseCIDF[Lig_Country=="FRA" & Col_Country!="FRA",]
+  BaseSExport<-ReqSum(BaseSExport,c("Col_Country","Col_Indus"),OptMRIO=F) 
+  BaseSExport<-BaseSExport[,Col_Indus:="TOTAL"][,Col_Country:="TOTAL"][,Compo:="Export"][,CountryREF:="FRA"]   
+  setnames(BaseSExport,"year","yearREF" )
+  
+   BaseVA<-Base_depart[["VA"]][Col_Country=="FRA",][,Lig_Indus:="TOTAL"][,Lig_Country:="TOTAL"][,Compo:="VA"][,CountryREF:="FRA"]   
+  setnames(BaseVA,"year","yearREF" )
+  
+
+DVAiX_tot<-DVAiX[,sum(value),by=Compo][,Col_Indus:="TOTAL"][,Col_Country:="TOTAL"][,Lig_Indus:="TOTAL"][,Lig_Country:="TOTAL"][,Compo:="DVAiX_tot"]  
+setnames(DVAiX_tot,"V1","value")
+DVAiM_tot<-DVAiM_PR[,sum(value),by=Compo][,Col_Indus:="TOTAL"][,Col_Country:="TOTAL"][,Lig_Indus:="TOTAL"][,Lig_Country:="TOTAL"][,Compo:="DVAiM_tot"]  
+setnames(DVAiM_tot,"V1","value")
+FVAiX_tot<-FVAiX_PR[,sum(value),by=Compo][,Col_Indus:="TOTAL"][,Col_Country:="TOTAL"][,Lig_Indus:="TOTAL"][,Lig_Country:="TOTAL"][,Compo:="FVAiX_tot"]  
+setnames(FVAiX_tot,"V1","value")
+FVAiM_tot<-FVAiM_PR[,sum(value),by=Compo][,Col_Indus:="TOTAL"][,Col_Country:="TOTAL"][,Lig_Indus:="TOTAL"][,Lig_Country:="TOTAL"][,Compo:="FVAiM_tot"]  
+setnames(FVAiM_tot,"V1","value")
+BVAiM_tot<-BVAiM_PR[,sum(value),by=Compo][,Col_Indus:="TOTAL"][,Col_Country:="TOTAL"][,Lig_Indus:="TOTAL"][,Lig_Country:="TOTAL"][,Compo:="BVAiM_tot"]  
+setnames(BVAiM_tot,"V1","value")
+VAXnoguera_tot<-VAXnoguera[,sum(value),by=Compo][,Col_Indus:="TOTAL"][,Col_Country:="TOTAL"][,Lig_Indus:="TOTAL"][,Lig_Country:="TOTAL"][,Compo:="VAXnoguera_tot"]  
+setnames(VAXnoguera_tot,"V1","value")
+
+#DVAiX_tot<-sum(DVAiX$value)
+#DVAiM_tot_old<-sum(DVAiM$value)
+#FVAiX_tot<-sum(FVAiX$value)
+#FVAiM_tot<-sum(FVAiM$value)
+#BVAiM_tot<-sum(BVAiM$value)
+#VAXnoguera_tot<-sum(VAXnoguera$value)
+
+Base_Out<-rbind(DVAiX,DVAiM,FVAiX,FVAiM,BVAiM,DVAiM_PR,FVAiX_PR,FVAiM_PR,BVAiM_PR,VAXnoguera,DVAiX_tot,DVAiM_tot,FVAiX_tot,FVAiM_tot,BVAiM_tot,VAXnoguera_tot)
+Base_Out$CountryREF<-"FRA"
+Base_Out$yearREF<-1990
+
+```
+
+
+
+Sortie des données de contenus en VA des exports
+```{r}
+# Chargement des bases
+BASE_ECOLE<-readRDS("Sorties/BASE_ECOLE.rds")
+BASE_A17<-readRDS("Sorties/BASE_A17.rds")
+Interm_LRWIOD<-readRDS("Sorties/BDn_LR_WIOD.rds")
+Interm_WIOD<-readRDS("Sorties/BDn_WIOD.rds")
+Interm_FIG<-readRDS("Sorties/BDn_FIG.rds")
+
+ContVAdesExports_ECOLE<-BouclePaysEtAnneesContVAdesExports(BASE_ECOLE,1965:2020,OptMRIO=TRUE)
+saveRDS(ContVAdesExports_ECOLE,"Sorties/RESULT_ContVAdesExports_ECOLE.rds")
+
+ContVAdesExports_A17<-BouclePaysEtAnneesContVAdesExports(BASE_A17,1965:2020,OptMRIO=TRUE)
+saveRDS(ContVAdesExports_A17,"Sorties/RESULT_ContVAdesExports_A17.rds")
+ 
+ContVAdesExports_LRWIOD<-BouclePaysEtAnneesContVAdesExports(Interm_LRWIOD,1965:2000,OptMRIO=FALSE)
+ saveRDS(ContVAdesExports_LRWIOD,"Sorties/RESULT_ContVAdesExports_LRWIOD.rds")
+ 
+ContVAdesExports_WIOD<-BouclePaysEtAnneesContVAdesExports(Interm_WIOD,2000:2014,OptMRIO=FALSE)
+ saveRDS(ContVAdesExports_WIOD,"Sorties/RESULT_ContVAdesExports_WIOD.rds")
+ 
+ContVAdesExports_FIGARO<-BouclePaysEtAnneesContVAdesExports(Interm_FIG,2010:2020,OptMRIO=FALSE)
+ saveRDS(ContVAdesExports_FIGARO,"Sorties/RESULT_ContVAdesExports_FIGARO.rds")
+```
+
+
+
+Sortie des données de MADE-IN
+```{r}
+### Tests
+Test_MadeIn<-MadeIn(BASE_A17,annee=1990,OptMRIO=TRUE)  
+
+Test_MadeIn<-MadeIn(Interm_FIG,annee=2020,OptMRIO=FALSE)  
+
+MADEINs_ECOLE<-BoucleAnneesMADEINs(BASE_ECOLE,1975:1978,OptMRIO=TRUE)
+  
+# Chargement des bases
+BASE_ECOLE<-readRDS("Sorties/BASE_ECOLE.rds")
+BASE_A17<-readRDS("Sorties/BASE_A17.rds")
+Interm_LRWIOD<-readRDS("Sorties/BDn_LR_WIOD.rds")
+Interm_WIOD<-readRDS("Sorties/BDn_WIOD.rds")
+Interm_FIG<-readRDS("Sorties/BDn_FIG.rds")
+
+MADEINs_ECOLE<-BoucleAnneesMADEINs(BASE_ECOLE,1965:2020,OptMRIO=TRUE)
+saveRDS(MADEINs_ECOLE,"Sorties/RESULT_MADEINs_ECOLE.rds")
+
+MADEINs_A17<-BoucleAnneesMADEINs(BASE_A17,1965:2020,OptMRIO=TRUE)
+saveRDS(MADEINs_A17,"Sorties/RESULT_MADEINs_A17.rds")
+ 
+MADEINs_LRWIOD<-BoucleAnneesMADEINs(Interm_LRWIOD,1965:2000,OptMRIO=FALSE)
+ saveRDS(MADEINs_LRWIOD,"Sorties/RESULT_MADEINs_LRWIOD.rds")
+ 
+MADEINs_WIOD<-BoucleAnneesMADEINs(Interm_WIOD,2000:2014,OptMRIO=FALSE)
+ saveRDS(MADEINs_WIOD,"Sorties/RESULT_MADEINs_WIOD.rds")
+ 
+MADEINs_FIGARO<-BoucleAnneesMADEINs(Interm_FIG,2010:2020,OptMRIO=FALSE)
+ saveRDS(MADEINs_FIGARO,"Sorties/RESULT_MADEINs_FIGARO.rds")
+```
+
+
+
+Test Implémentation GAO (avant fonction)
+```{r}
+# Chargement des bases
+BASE_ECOLE<-readRDS("Sorties/BASE_ECOLE.rds")
+BASE_A17<-readRDS("Sorties/BASE_A17.rds")
+Interm_LRWIOD<-readRDS("Sorties/BDn_LR_WIOD.rds")
+Interm_WIOD<-readRDS("Sorties/BDn_WIOD.rds")
+Interm_FIG<-readRDS("Sorties/BDn_FIG.rds")
+
+### Tests fonction
+toto<-GAO(BASE_ECOLE,2007,2008,OptMRIO=TRUE)
+toto2<-GAO(BASE_A17,2007,2008,OptMRIO=TRUE)
+
+toto3<-GAO(Interm_LRWIOD,1993,1994,OptMRIO=FALSE)
+toto4<-GAO(Interm_WIOD,2007,2008,OptMRIO=FALSE)
+toto5<-GAO(Interm_FIG,2012,2013,OptMRIO=FALSE)
+
+#############################################################
+
+BASE_ECOLE<-readRDS("Sorties/BASE_ECOLE.rds")
+
+MRIO_T0<-CompoECOLEouA17(BASE_ECOLE,typeCompo="OptFullOptionsBonus",date=1990)
+MRIO_T1<-CompoECOLEouA17(BASE_ECOLE,typeCompo="OptFullOptionsBonus",date=1991)
+
+# Recuperation des caractéristiques de format du mrio considéré
+Nb_Countries<-length(unique(MRIO_T0[["CI"]]$Lig_Country))
+List_Countries<-as.list(sort(unlist(as.list(unique(MRIO_T0[["CI"]]$Lig_Country)))))
+Nb_Indus<-length(unique(MRIO_T0[["CI"]]$Lig_Indus))
+List_Indus<-as.list(sort(unlist(as.list(unique(MRIO_T0[["CI"]]$Lig_Indus)))))
+Nb_IndCountries<-Nb_Countries*Nb_Indus
+
+# Calcul de (I-A)^-1-I    ( L - I )
+ImoinsAmoins1moinsI_T0<-as.matrix(MRIO_T0[["L"]])-diag(Nb_IndCountries)
+ImoinsAmoins1moinsI_T1<-as.matrix(MRIO_T1[["L"]])-diag(Nb_IndCountries)
+
+# Extraction de DF au format 1 colonne par pays (et total version diagonale) : passage en format matrix
+DF0<-MRIO_T0[["DF"]]
+DF0sum<-ReqSum(DF0,"Col_Indus")
+DF0sum_tab<-dcast(DF0sum,Lig_Country + Lig_Indus ~ Col_Country,value.var="value")
+DF_T0<-as.matrix(DF0sum_tab[,3:ncol(DF0sum_tab)])
+rownames(DF_T0)<-rownames(ImoinsAmoins1moinsI_T0)
+
+DF1<-MRIO_T1[["DF"]]
+DF1sum<-ReqSum(DF1,"Col_Indus")
+DF1sum_tab<-dcast(DF1sum,Lig_Country + Lig_Indus ~ Col_Country,value.var="value")
+DF_T1<-as.matrix(DF1sum_tab[,3:ncol(DF1sum_tab)])
+rownames(DF_T1)<-rownames(ImoinsAmoins1moinsI_T1)
+
+DFdiag_T0<-diag(as.vector(MRIO_T0[["DF_TOT"]]$value))
+DFdiag_T1<-diag(as.vector(MRIO_T1[["DF_TOT"]]$value))
+rownames(DFdiag_T0)<-rownames(DFdiag_T1)<-rownames(ImoinsAmoins1moinsI_T1)
+colnames(DFdiag_T0)<-colnames(DFdiag_T1)<-colnames(ImoinsAmoins1moinsI_T1)
+
+# Calcul de c0 et c1
+c0<-ImoinsAmoins1moinsI_T0 %*% DFdiag_T1
+c1<-ImoinsAmoins1moinsI_T1 %*% DFdiag_T1
+
+# Calcul (par agrégation) de c0star et c1star et de leur version matricielle par empilement
+c0star<-colSums(c0[endsWith(rownames(c0), List_Indus[[1]]),])
+for(k in 2:Nb_Indus){
+  c0star<-rbind(c0star,colSums(c0[endsWith(rownames(c0), List_Indus[[k]]),]))
+}
+rownames(c0star)<-List_Indus
+
+c1star<-colSums(c1[endsWith(rownames(c1), List_Indus[[1]]),])
+for(k in 2:Nb_Indus){
+  c1star<-rbind(c1star,colSums(c1[endsWith(rownames(c1), List_Indus[[k]]),]))
+}
+rownames(c1star)<-List_Indus
+
+c0star_mat<-c0star
+for(k in 2:Nb_Countries){
+  c0star_mat<-rbind(c0star_mat,c0star)
+}
+c1star_mat<-c1star
+for(k in 2:Nb_Countries){
+  c1star_mat<-rbind(c1star_mat,c1star)
+}
+
+# Calcul de R0p et R1p
+R0p<-c0/c0star_mat
+R1p<-c1/c1star_mat
+
+# [C0* x r1A] et [C0* x r1B]:  
+Interm_c0starR1p<-c0star_mat*R1p
+
+# r1=[C0* x r1A] -c0 : relocalisation sectorielle tirée par les inputs (variation liée à un changement de fournisseur )
+r1<-Interm_c0starR1p-c0
+r1<-as.data.frame(r1)
+rownames(r1)<-rownames(c0)
+
+# On passe à ff
+interm_ff0<-colSums(DF_T0[endsWith(rownames(DF_T0), List_Indus[[1]]),])
+for(k in 2:Nb_Indus){
+  interm_ff0<-rbind(interm_ff0,colSums(DF_T0[endsWith(rownames(DF_T0), List_Indus[[k]]),]))
+}
+rownames(interm_ff0)<-List_Indus
+interm_ff0<-AddRownamesToFirstCol(interm_ff0)
+interm_ff0<-setDT(interm_ff0)
+interm_ff0<-melt(interm_ff0)
+ff0<-t(as.matrix(interm_ff0$value,drop=FALSE))
+ff0mat<-ff0
+for(k in 2:Nb_IndCountries){ff0mat<-rbind(ff0mat,ff0)}
+
+interm_ff1<-colSums(DF_T1[endsWith(rownames(DF_T1), List_Indus[[1]]),])
+for(k in 2:Nb_Indus){
+  interm_ff1<-rbind(interm_ff1,colSums(DF_T1[endsWith(rownames(DF_T1), List_Indus[[k]]),]))
+}
+rownames(interm_ff1)<-List_Indus
+interm_ff1<-AddRownamesToFirstCol(interm_ff1)
+interm_ff1<-setDT(interm_ff1)
+interm_ff1<-melt(interm_ff1)
+ff1<-t(as.matrix(interm_ff1$value,drop=FALSE))
+ff1mat<-ff1
+for(k in 2:Nb_IndCountries){ff1mat<-rbind(ff1mat,ff1)}
+
+# Part de la conso finale fournies par chaque économie (cas 2 produits/ 2 pays)
+MatDiagTO<-matrix(0,nrow=Nb_IndCountries,ncol=Nb_IndCountries)  # Initialisation
+for(lig in 1:Nb_Countries){
+  for(col in 1:Nb_Countries){
+  MatDiagTO[(lig*Nb_Indus-Nb_Indus+1):(lig*Nb_Indus),(col*Nb_Indus-Nb_Indus+1):(col*Nb_Indus)]<-diag(as.vector(DF_T0[(lig*Nb_Indus-Nb_Indus+1):(lig*Nb_Indus),col]))
+}
+}
+MatDiagT1<-matrix(0,nrow=Nb_IndCountries,ncol=Nb_IndCountries)  # Initialisation
+for(lig in 1:Nb_Countries){
+  for(col in 1:Nb_Countries){
+  MatDiagT1[(lig*Nb_Indus-Nb_Indus+1):(lig*Nb_Indus),(col*Nb_Indus-Nb_Indus+1):(col*Nb_Indus)]<-diag(as.vector(DF_T1[(lig*Nb_Indus-Nb_Indus+1):(lig*Nb_Indus),col]))
+}
+}
+
+Part_T0<-MatDiagTO/ff0mat
+Part_T1<-MatDiagT1/ff1mat
+
+# r2=(Fc1-Fc0)*ff1   ( relocalisation sectorielle tirée par les produits finaux  )
+r2<-(Part_T1-Part_T0)*ff1mat
+r2<-as.data.frame(r2)
+rownames(r2)<-rownames(r2)<-rownames(ImoinsAmoins1moinsI_T1)
+colnames(r2)<-colnames(r2)<-colnames(ImoinsAmoins1moinsI_T1)
+
+# r3=((I-A0)^1-1)*r2*e  (  relocalisation sectorielle indirecte tirée par les produits finaux  )
+interm_r2<-rowSums(r2)
+for(k in 2:Nb_IndCountries){interm_r2<-rbind(interm_r2,rowSums(r2))}
+r3<-ImoinsAmoins1moinsI_T0*interm_r2
+r3<-as.data.frame(r3)
+rownames(r3)<-rownames(r3)<-rownames(ImoinsAmoins1moinsI_T1)
+colnames(r3)<-colnames(r3)<-colnames(ImoinsAmoins1moinsI_T1)
+
+# Transformation en DT et base de résultat
+r1_dt<-AddRownamesToFirstCol(r1)
+r1_dt<-setDT(r1_dt)
+r2_dt<-AddRownamesToFirstCol(r2)
+r2_dt<-setDT(r2_dt)
+r3_dt<-AddRownamesToFirstCol(r3)
+r3_dt<-setDT(r3_dt)
+r1_dt<-melt(r1_dt)
+r2_dt<-melt(r2_dt)
+r3_dt<-melt(r3_dt)
+r1_dt<-r1_dt[,gao_res:="r1"]
+r2_dt<-r2_dt[,gao_res:="r2"]
+r3_dt<-r3_dt[,gao_res:="r3"]
+base_dt<-rbind(r1_dt,r2_dt,r3_dt)
+setnames(base_dt,"joint","PR")
+setnames(base_dt,"variable","BR")
+
+List_out<-list(r1=r1,r2=r2,r3=r3,base_dt=base_dt)
+
+```
+
+Sortie GAO
+```{r}
+### Tests
+TestGAO_ECOLE<-BoucleGAO(BASE_ECOLE,1975:1977,OptMRIO=TRUE) # Attention on décale d'une année à la fin car entre T et (T+1)
+TestGAO_A17<-BoucleGAO(BASE_A17,1999:2000,OptMRIO=TRUE) # Attention on décale d'une année à la fin car entre T et (T+1)
+  
+
+ base_dt<-rbind(test1[["PROD"]],test2[["PROD"]])
+ dcastbase<-dcast(base_dt,Lig_Country + Lig_Indus ~ MRIO + year ,value.var="value")
+ # ok problème identifié : pour le passage entre 1999 et 2000 on a un problème de nomenclature : avec LR-WIOD la table de passage
+ #    n est aps exacte et on 'mange' 2 produits (MN et OQ) donc il y a 15 produits au lieu de 17 (notamment dans WIOD en 2000)
+ #    il faut donc activer l'option de garder LR-WIOD en 2000 pour faire le calcul 1999-2000 sinon ça plante pour incompatibilité de format.
+  
+# Chargement des bases
+BASE_ECOLE<-readRDS("Sorties/BASE_ECOLE.rds")
+BASE_A17<-readRDS("Sorties/BASE_A17.rds")
+Interm_LRWIOD<-readRDS("Sorties/BDn_LR_WIOD.rds")
+Interm_WIOD<-readRDS("Sorties/BDn_WIOD.rds")
+Interm_FIG<-readRDS("Sorties/BDn_FIG.rds")
+
+GAO_ECOLE<-BoucleGAO(BASE_ECOLE,1965:2019,OptMRIO=TRUE)
+saveRDS(GAO_ECOLE,"Sorties/RESULT_GAO_ECOLE.rds")
+
+GAO_A17<-BoucleGAO(BASE_A17,1965:2019,OptMRIO=TRUE) 
+saveRDS(GAO_A17,"Sorties/RESULT_GAO_A17.rds")
+#GAO_A17_p1<-BoucleGAO(BASE_A17,1965:1998,OptMRIO=TRUE) 
+#saveRDS(GAO_A17_p1,"Sorties/RESULT_GAO_A17_p1.rds")
+#GAO_A17_p2<-BoucleGAO(BASE_A17,2000:2019,OptMRIO=TRUE) 
+#saveRDS(GAO_A17_p2,"Sorties/RESULT_GAO_A17_p2.rds")
+ 
+GAO_LRWIOD<-BoucleGAO(Interm_LRWIOD,1965:1998,OptMRIO=FALSE) # Attention priorité à WIOD en 2000 !
+ saveRDS(GAO_LRWIOD,"Sorties/RESULT_GAO_LRWIOD.rds")
+ 
+GAO_WIOD<-BoucleGAO(Interm_WIOD,2000:2013,OptMRIO=FALSE)
+ saveRDS(GAO_WIOD,"Sorties/RESULT_GAO_WIOD.rds")
+ 
+GAO_FIGARO<-BoucleGAO(Interm_FIG,2010:2019,OptMRIO=FALSE)
+ saveRDS(GAO_FIGARO,"Sorties/RESULT_GAO_FIGARO.rds")
+```
+
+Test fonction linkage backward et Forward
+```{r}
+# Chargement des bases
+BASE_ECOLE<-readRDS("Sorties/BASE_ECOLE.rds")
+BASE_A17<-readRDS("Sorties/BASE_A17.rds")
+OptMRIO<-TRUE
+base_dt<-BASE_A17
+annee<-2012
+
+# On démare par calculer le matrices sources dont on a besoin pour les linkages
+  if(OptMRIO==TRUE){
+    inter_listTab<-CompoECOLEouA17(base_dt,typeCompo="OptFullOptionsBonus",date=annee)
+  }else{
+    inter_listTab<-CompoMRIO(base_dt,typeCompo="OptFullOptionsBonus",date=annee)
+  }
+L_dt<-setDT(AddRownamesToFirstCol(inter_listTab[["L"]]))
+L_dt<-melt(L_dt)
+setnames(L_dt,"joint","PR")
+setnames(L_dt,"variable","BR")
+L_dt<-L_dt[PR==BR,value:=0] # On met la diagonale à 0 pour avoir un indicateur de total linkage
+L_dt<-SplitPRBR(L_dt)
+
+G_dt<-setDT(AddRownamesToFirstCol(inter_listTab[["InvBGhosh"]]))
+G_dt<-melt(G_dt)
+setnames(G_dt,"joint","PR")
+setnames(G_dt,"variable","BR")
+G_dt<-G_dt[PR==BR,value:=0] # On met la diagonale à 0 pour avoir un indicateur de total linkage
+G_dt<-SplitPRBR(G_dt)
+  
+# Sommation : numérateur
+Bwd_num<-L_dt[, sum(value),by=c("Lig_Country","Lig_Indus")]
+Fwd_num<-G_dt[, sum(value),by=c("Col_Country","Col_Indus")]
+
+# Sommation : dénominateur
+Bwd_Tot_denom<-L_dt[, sum(value)]
+Fwd_Tot_denom<-G_dt[, sum(value)]
+Bwd_Prod_denom<-inter_listTab[["PROD"]]
+Fwd_Prod_denom<-inter_listTab[["PROD"]]
+setnames(Fwd_Prod_denom,"Lig_Country","Col_Country")
+setnames(Fwd_Prod_denom,"Lig_Indus","Col_Indus")
+Bwd_byCountry_denom<-L_dt[, sum(value),by="Col_Country"]
+Fwd_byCountry_denom<-G_dt[, sum(value),by="Lig_Country"]
+
+# Calcul des indicateurs normalisés (par les dénominateurs)
+Indic_Bwd_tot<-Bwd_num # Init
+Indic_Bwd_tot[,3]<-Bwd_num[,3]/Bwd_Tot_denom
+Indic_Fwd_tot<-Fwd_num # Init
+Indic_Fwd_tot[,3]<-Fwd_num[,3]/Fwd_Tot_denom
+
+Indic_Fwd_Prod<-Fwd_Prod_denom[Fwd_num,on=.(Col_Country,Col_Indus)] # Init
+Indic_Fwd_Prod<-Indic_Fwd_Prod[,value:=V1/value]
+Indic_Fwd_Prod<-Indic_Fwd_Prod[,c("Col_Country","Col_Indus","value")]
+setnames(Bwd_Prod_denom,"Col_Country","Lig_Country")
+setnames(Bwd_Prod_denom,"Col_Indus","Lig_Indus")
+Indic_Bwd_Prod<-Bwd_Prod_denom[Bwd_num,on=.(Lig_Country,Lig_Indus)] # Init
+Indic_Bwd_Prod<-Indic_Bwd_Prod[,value:=V1/value]
+Indic_Bwd_Prod<-Indic_Bwd_Prod[,c("Lig_Country","Lig_Indus","value")]
+
+setnames(Fwd_byCountry_denom,"Lig_Country","Col_Country")
+Indic_Fwd_byCountry<-Fwd_byCountry_denom[Fwd_num,on=.(Col_Country)] # Init
+Indic_Fwd_byCountry<-Indic_Fwd_byCountry[,value:=i.V1/V1]
+Indic_Fwd_byCountry<-Indic_Fwd_byCountry[,c("Col_Country","Col_Indus","value")]
+setnames(Bwd_byCountry_denom,"Col_Country","Lig_Country")
+Indic_Bwd_byCountry<-Bwd_byCountry_denom[Bwd_num,on=.(Lig_Country)] # Init
+Indic_Bwd_byCountry<-Indic_Bwd_byCountry[,value:=i.V1/V1]
+Indic_Bwd_byCountry<-Indic_Bwd_byCountry[,c("Lig_Country","Lig_Indus","value")]
+
+List_out<-list(Indic_Bwd_byCountry=Indic_Bwd_byCountry,Indic_Fwd_byCountry=Indic_Fwd_byCountry,Indic_Bwd_tot=Indic_Bwd_tot,Indic_Fwd_Prod=Indic_Fwd_Prod,Indic_Bwd_tot=Indic_Bwd_tot,Indic_Fwd_tot=Indic_Fwd_tot)
+
+### Test de la fonction
+toto<-LinkageBwdFwd(BASE_A17,2020,OptMRIO=TRUE)
+toto2<-LinkageBwdFwd(BASE_ECOLE,2020,OptMRIO=TRUE)
+toto3<-LinkageBwdFwd(Interm_WIOD,2007,OptMRIO=FALSE)
+  
+toto4<-BoucleLinkageBwdFwd(BASE_ECOLE,2010:2013,OptMRIO=TRUE)
+
+
+
+```
+
+Sortie Linkage
+```{r}
+# Chargement des bases
+BASE_ECOLE<-readRDS("Sorties/BASE_ECOLE.rds")
+BASE_A17<-readRDS("Sorties/BASE_A17.rds")
+Interm_LRWIOD<-readRDS("Sorties/BDn_LR_WIOD.rds")
+#Interm_WIOD<-readRDS("Sorties/BDn_WIOD.rds")
+#Interm_FIG<-readRDS("Sorties/BDn_FIG.rds")
+
+LinkageBwdFwd_ECOLE<-BoucleLinkageBwdFwd(BASE_ECOLE,1965:2020,OptMRIO=TRUE)
+saveRDS(LinkageBwdFwd_ECOLE,"Sorties/RESULT_LinkageBwdFwd_ECOLE.rds")
+
+LinkageBwdFwd_A17<-BoucleLinkageBwdFwd(BASE_A17,2000:2020,OptMRIO=TRUE) 
+saveRDS(LinkageBwdFwd_A17,"Sorties/RESULT_LinkageBwdFwd_A17.rds")
+
+LinkageBwdFwd_LRWIOD<-BoucleLinkageBwdFwd(Interm_LRWIOD,1965:1999,OptMRIO=FALSE) # Attention priorité à WIOD en 2000 !
+ saveRDS(LinkageBwdFwd_LRWIOD,"Sorties/RESULT_LinkageBwdFwd_LRWIOD.rds")
+ 
+```
+
+
+
+
+
+Tests de data.table
+
+```{r}
+Prod138<-read_excel("TabPass_MRIO_FC.xlsx",sheet = "Base_Industries", col_names = TRUE)  
+Prod138<-setDT(Prod138)
+Prod138[139:140,"A138" ]<-Prod138[141:142,"A138" ]
+Prod138<-Prod138[1:138,]
+  
+trp<-as.data.frame(TRP_TESS_IMP_2018)
+trp[,"A138"]<-paste0("G",trp[,"A138"])
+trp<-setDT(trp, key="A138")
+setnames(trp, "rn", "A138")
+
+
+#setkey(trp,A138)
+#trpX <- merge(Prod138,trp, by="A138")
+#trpX <-Prod138[trp,on="A138",all=TRUE]
+
+trpX <-merge(Prod138,trp,by="A138",all=TRUE)
+
+testVect<-trp[,2]
+testVect2<-trp[,2]/0
+
+browseVignettes(package="data.table")
+
+toto<-t(trp)%*% as.matrix(testVect)
+
+mycol<-6
+testvect3<-trp[,..mycol]
+
+testVect2[is.na(testVect2),]<-0
+
+
+
+
+testSQL1<-trpX[IMP_UE>1000,sum(IMP_UE),by=A17]
+
+
+
+
+testSQL2<-trp[Prod_produit>1000, lapply(.SD, sum), by=corr_CAFAB, .SDcols = c("Imp_services", "MC", "MT")]
+
+testSQL3<-trp[Prod_produit>1000, lapply(.SD, sum), by=corr_CAFAB, .SDcols = c(1:8)]
+
+testSQL4<-trp[, u := 1/MC][]  #DT[, `:=`(v = 2, w = 3L)][]    # Ajouter une ou plusieurs colonnes
+
+testSQL5<-testSQL4[, u := NULL][] # Retirer une colonne
+
+testSQL6<-trp[Prod_produit>1000, condi := "Supp100", verbose = TRUE][] # cree une variable conditionnellement à une autre, et NA pour le reste. Avec vebose on a l'info sur le nb de lignes modifiées.
+
+TestJoint1<-trp[testSQL1, on=.(corr_CAFAB)] # Jointure : it is called an equi join since we are only getting matches where equality holds between the on= columns in the two tables.
+
+TestJoint2<-trp[testSQL1, on=.(MC=corr_CAFAB)] # Avec des noms de colonnes différents entre les 2 tables.
+
+TestJoint3<-trp[testSQL1, on=.(corr_CAFAB),sum(MC=corr_CAFAB), by=.EACHI] # Aggregating in a join. On peut sauvegarder le résultat dans une colonne en rajoutant $nomCol à la fin.
+
+TestJoint4<-trp[CJ(testSQL1 = testSQL1, corr_CAFAB = corr_CAFAB, unique=TRUE), on=.(testSQL1, corr_CAFAB)] # Produit cartésien par self join
+
+TestJoint5<-trp[testSQL1, on=.(MC=corr_CAFAB), mult="first"] # Now each row of b only returns the first matching row (from the top) in a. Similarly, we could select mult="last"
+
+TestJoint6<-trp[testSQL1, on=.(MC=corr_CAFAB), nomatch=0] # Dropping unmatched elements of i
+
+setkey(trp, corr_CAFAB) # Setting keys and indices : If a table is always joined on the same column(s), these can be set as its “key.” Setting the key of x sorts the table and allows for skipping on= during x[i,on=] joins. It also can have some performance benefits. See ?setkey.
+trp["MC"]
+
+setindex(trp, corr_CAFAB, verbose=TRUE) # Most of the performance benefits of a key can also be achieved with an “index.” Unlike a key, which sorts the table, an index simply notes the order of the table with respect to some columns. A table can have many indices, but only one key:
+
+TestJoint2<-trp[!MC, on=.(MC=corr_CAFAB)] # Anti joins : We also have the option of selecting unmatched rows with !
+
+# Suite : 3.6.5 Character columns  de https://franknarf1.github.io/r-tutorial/_book/tables.html
+
+
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
