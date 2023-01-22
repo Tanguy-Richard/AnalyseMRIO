@@ -1,0 +1,13 @@
+utils::globalVariables(
+  c(
+    '.',
+    'year',
+    'Lig_Country',
+    'Col_Country',
+    'MRIO',
+    'Lig_Indus',
+    'Col_Indus',
+    'value',
+    'i.value'
+  )
+)

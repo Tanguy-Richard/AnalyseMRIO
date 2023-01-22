@@ -1,0 +1,25 @@
+Package: AnalyseMRIO
+Title: What the Package Does (One Line, Title Case)
+Version: 0.0.0.9000
+Authors@R: 
+    person("Tanguy", "Richard", , "lorenzitanguy@gmail.com", role = c("aut", "cre"))
+Description: Reprise des fonctions du projet sous la forme d'un package R.
+License: GPL-3
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.1.2
+Suggests: 
+    knitr,
+    rmarkdown
+VignetteBuilder: knitr
+Imports: 
+    Rcpp,
+    dplyr,
+    data.table,
+    RcppArmadillo
+LinkingTo: 
+    Rcpp, RcppArmadillo
+Language: fr
+Depends: 
+    R (>= 2.10)
+LazyData: true
