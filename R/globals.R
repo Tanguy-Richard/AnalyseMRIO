@@ -8,6 +8,8 @@ utils::globalVariables(
     'Lig_Indus',
     'Col_Indus',
     'value',
-    'i.value'
+    'i.value',
+    '..C1',
+    '..C2'
   )
 )

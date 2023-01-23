@@ -30,24 +30,20 @@ data(BASE_ECOLE)
 MRIO_1990_ALL<-CompoECOLEouA17(BASE_ECOLE,"OptFullOptionsBonus",date=1990)
 
 # Pour avoir la matrice de Leontief :
+MRIO_1990_ALL<-CompoECOLEouA17(BASE_ECOLE,"OptFullOptionsBonus",date=1990)
 A <- MRIO_1990_ALL[["A_tab"]][,-1] # On enlève la colonne année
-noms <- paste(A$Lig_Country, A$Lig_Indus, sep="_") #On nomme les lignes
-A <- as.matrix(A[,-c(1,2)]) # On ne garde que la matrice qui nous interesse
-row.names(A) <- noms
+A <- MatCol(A,"Lig_Country","Lig_Indus")
 
 # Pour aller chercher Y (demande finale)
 Y <- MRIO_1990_ALL[["DF_TOT"]]
 Y <- Y[,-c(1,2)] # prendre uniquement la colonne d'interet
-noms <- paste(Y$Lig_Country, Y$Lig_Indus, sep="_")
-Y <- as.matrix(Y[,-c(1,2)])
-rownames(Y) <- noms
+Y <- MatCol(Y,"Lig_Country","Lig_Indus")
 
 # Pour aller chercher VA
 VA <- MRIO_1990_ALL[["VA"]]
 VA <- VA[,-c(1,2)] # prendre uniquement la colonne d'interet
-noms <- paste(VA$Col_Country, VA$Col_Indus, sep="_")
-VA <- as.matrix(VA[,-c(1,2)])
-rownames(VA) <- noms
+VA <- MatCol(VA,"Col_Country","Col_Indus")
+
 
 # On donnes un parcours
 Z <- c( "CHN_ENRJ", "CHN_AGR_INDU", "UE_OTHERS_AGR_INDU")
