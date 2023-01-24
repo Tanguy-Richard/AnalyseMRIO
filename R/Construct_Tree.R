@@ -44,10 +44,25 @@
 #' # Contribution du sous arbre
 #' test <- Construct_Tree(VA,A,Y,5,4000,Z)
 #'
-#'
+#' test2 <- Construct_Tree(VA,A,Y,5,4000)
 #'
 #' }
-Construct_Tree <- function(f, A, Y, Tmax, tol, Z){
+Construct_Tree <- function(f, A, Y, Tmax, tol, Z = "Tout"){
+  sector <- row.names(Y)
+  if("Tout" %in% Z){
+    suite <-  list()
+    for(i in sector) {
+      if(Contribution_SubTree(f, A, Y, i) < tol) {
+        suite[[i]] = NULL
+      }else{
+        suite[[i]] = Construct_Tree(f, A, Y, Tmax, tol, i)
+      }
+    }
+    tree=list(
+      Z = "Tout",
+      Next = suite
+    )
+  }else{
   Tr = length(Z)
   sector <- row.names(Y)
   if(Tr >= Tmax) {
@@ -72,7 +87,7 @@ Construct_Tree <- function(f, A, Y, Tmax, tol, Z){
     tree = list(Z = Z,
                 Node = Contribution_Node(f, A, Y, Z),
                 Next = suite)
-  }
+  }}
   return(tree)
 }
 

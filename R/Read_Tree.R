@@ -37,8 +37,23 @@
 #' lecture <- Read_Tree(test)
 #' head(lecture[order(lecture$Node,decreasing = TRUE),])
 #'
+#'
+#' test2 <- Construct_Tree(VA,A,Y,5,4000)
+#' lecture2 <- Read_Tree(test2)
+#' head(lecture2[order(lecture2$Node,decreasing = TRUE),])
 #' }
 Read_Tree <- function(tree){
+  if("Tout" %in% tree$Z){
+    Res <- data.frame()
+    if(length(tree$Next)==0){
+      return(Res)
+    }else{
+      for(i in tree$Next){
+        Res <- rbind(Res, Read_Tree(i))
+      }
+      return(Res)
+    }
+  }else{
     Node <- tree$Node
     Z <- paste(tree$Z, collapse = " ")
     Res <- data.frame(Z,Node)
@@ -49,5 +64,6 @@ Read_Tree <- function(tree){
         Res <- rbind(Res, Read_Tree(i))
       }
       return(Res)
+    }
     }
 }

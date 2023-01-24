@@ -4,7 +4,7 @@
 \alias{Construct_Tree}
 \title{Construct_Tree}
 \usage{
-Construct_Tree(f, A, Y, Tmax, tol, Z)
+Construct_Tree(f, A, Y, Tmax, tol, Z = "Tout")
 }
 \arguments{
 \item{f}{vecteur des contributions par pays_secteur par unité de production}
@@ -59,7 +59,7 @@ Z <- c( "CHN_ENRJ")
 # Contribution du sous arbre
 test <- Construct_Tree(VA,A,Y,5,4000,Z)
 
-
+test2 <- Construct_Tree(VA,A,Y,5,4000)
 
 }
 }
