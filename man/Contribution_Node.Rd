@@ -39,11 +39,14 @@ Y <- MRIO_1990_ALL[["DF_TOT"]]
 Y <- Y[,-c(1,2)] # prendre uniquement la colonne d'interet
 Y <- MatCol(Y,"Lig_Country","Lig_Indus")
 
-# Pour aller chercher VA
+# Pour aller chercher VA/PROD
 VA <- MRIO_1990_ALL[["VA"]]
+PROD <- MRIO_1990_ALL[["PROD"]]
 VA <- VA[,-c(1,2)] # prendre uniquement la colonne d'interet
+PROD <- PROD[,-c(1,2)]
 VA <- MatCol(VA,"Col_Country","Col_Indus")
-
+PROD <- MatCol(PROD,"Lig_Country","Lig_Indus")
+VA <- VA/PROD
 
 # On donnes un parcours
 Z <- c( "CHN_ENRJ", "CHN_AGR_INDU", "UE_OTHERS_AGR_INDU")

@@ -4,7 +4,7 @@
 \alias{Construct_Tree}
 \title{Construct_Tree}
 \usage{
-Construct_Tree(f, A, Y, Tmax, tol, Z)
+Construct_Tree(f, A, Y, Tmax, tol, Z = "Tout")
 }
 \arguments{
 \item{f}{vecteur des contributions par pays_secteur par unité de production}
@@ -47,19 +47,23 @@ Y <- MRIO_1990_ALL[["DF_TOT"]]
 Y <- Y[,-c(1,2)] # prendre uniquement la colonne d'interet
 Y <- MatCol(Y,"Lig_Country","Lig_Indus")
 
-# Pour aller chercher VA
+# Pour aller chercher VA/PROD
 VA <- MRIO_1990_ALL[["VA"]]
+PROD <- MRIO_1990_ALL[["PROD"]]
 VA <- VA[,-c(1,2)] # prendre uniquement la colonne d'interet
+PROD <- PROD[,-c(1,2)]
 VA <- MatCol(VA,"Col_Country","Col_Indus")
+PROD <- MatCol(PROD,"Lig_Country","Lig_Indus")
+VA <- VA/PROD
 
 
 # On donnes un parcours
 Z <- c( "CHN_ENRJ")
 
 # Contribution du sous arbre
-test <- Construct_Tree(VA,A,Y,5,4000,Z)
+test <- Construct_Tree(VA,A,Y,5,0.5,Z)
 
-
+test2 <- Construct_Tree(VA,A,Y,5,0.5)
 
 }
 }
