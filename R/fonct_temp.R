@@ -8,6 +8,8 @@
 #' @param Tmax Profondeur maximale autorisée
 #' @param tol Valeur limite
 #' @param Z Noeud actuel
+#' @param L inverse de Leontief
+#' @param Ftot effet tottal
 #'
 #' @return Un arbre sous la forme d'une liste de 3 éléments :
 #'  - Z vecteur étiquettant le noeud
@@ -45,17 +47,56 @@
 #' # On donnes un parcours
 #' Z <- c( "CHN_ENRJ")
 #'
-#' # Contribution du sous arbre
-#' test <- Construct_Tree(VA,A,Y,5,0.5,Z)
+#' Calcul de paramètre
+#' L <- inversion_rcpp3(diag(ncol(A))-A)
+#' Ftot <- Mult2_rcpp3(t(VA),L)
 #'
-#' test2 <- Construct_Tree(VA,A,Y,5,0.5)
+#' # Contribution du sous arbre
+#' test <- fonct_temp(VA,A,Y,5,0.5,Z,L,Ftot)
+#'
+#' test2 <- fonct_temp(VA,A,Y,5,0.5,L,Ftot)
 #'
 #' }
-Construct_Tree <- function(f, A, Y, Tmax, tol, Z = "Tout"){
-
-  L <- inversion_rcpp3(diag(ncol(A))-A)
-  Ftot <- Mult2_rcpp3(t(f),L)
-
-  return(fonct_temp(f, A, Y, Tmax, tol, Z = "Tout",L,Ftot))
+fonct_temp <- function(f, A, Y, Tmax, tol, Z = "Tout", L, Ftot){
+  sector <- row.names(Y)
+  if("Tout" %in% Z){
+    suite <-  list()
+    for(i in sector) {
+      if(Contribution_SubTree(f, A, Y, i,L ,Ftot ) < tol) {
+        suite[[i]] = NULL
+      }else{
+        suite[[i]] = fonct_temp(f, A, Y, Tmax, tol, i , L, Ftot)
+      }
+    }
+    tree=list(
+      Z = "Tout",
+      Next = suite
+    )
+  }else{
+    Tr = length(Z)
+    sector <- row.names(Y)
+    if(Tr >= Tmax) {
+      suite <-  list()
+      for(i in sector) {
+        suite[[i]] <-  NULL
+      }
+      suite = suite[-1]
+      tree <-  list(Z = Z,
+                    Node = Contribution_Node(f, A, Y, Z),
+                    Next = suite)
+    }else{
+      suite <-  list()
+      for(i in sector) {
+        if(Contribution_SubTree(f, A, Y, c(Z, i),L ,Ftot ) < tol) {
+          suite[[i]] = NULL
+        }else{
+          suite[[i]] = fonct_temp(f, A, Y, Tmax, tol, c(Z, i), L, Ftot)
+        }
+      }
+      suite = suite[-1]
+      tree = list(Z = Z,
+                  Node = Contribution_Node(f, A, Y, Z),
+                  Next = suite)
+    }}
+  return(tree)
 }
-

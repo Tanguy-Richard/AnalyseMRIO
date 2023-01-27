@@ -6,6 +6,10 @@
 #' @param A matrice de Leontief
 #' @param Y Demande Finale
 #' @param Z Noeud (sous la forme d'un vecteur de pays_secteur)
+#' @param L inverse de leontief (pour faciliter le temps de calcul)
+#' "Calcul" => la fonction calcul elle même
+#' @param Ftot effet total (pour faciliter le temps de calcul)
+#' "Calcul" => la fonction calcul elle même
 #'
 #' @return La valeur de la contribution finale
 #' @export
@@ -25,6 +29,8 @@
 #' Y <- Y[,-c(1,2)] # prendre uniquement la colonne d'interet
 #' Y <- MatCol(Y,"Lig_Country","Lig_Indus")
 #'
+#'
+#'
 #' # Pour aller chercher VA/PROD
 #' VA <- MRIO_1990_ALL[["VA"]]
 #' PROD <- MRIO_1990_ALL[["PROD"]]
@@ -37,16 +43,21 @@
 #' # On donnes un parcours
 #' Z <- c( "CHN_ENRJ", "CHN_AGR_INDU", "UE_OTHERS_AGR_INDU")
 #'
+#'
 #' # Contribution du sous arbre
 #' Contribution_SubTree(VA,A,Y,Z)
 #' }
-Contribution_SubTree <- function(f,A,Y,Z){
+Contribution_SubTree <- function(f,A,Y,Z,L = "Calcul",Ftot = "Calcul"){
 
   # Inverse de Leontief
-  L <- inversion_rcpp3(diag(ncol(A))-A)
+  if(is.character(L)){
+    L <- inversion_rcpp3(diag(ncol(A))-A)
+  }
 
   # Calcul de l'impact total
-  Ftot <- Mult2_rcpp3(t(f),L)
+  if(is.character(Ftot)){
+    Ftot <- Mult2_rcpp3(t(f),L)
+  }
 
   tau <- length(Z)
   node_z <- Y[Z[1],]
