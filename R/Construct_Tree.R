@@ -56,6 +56,6 @@ Construct_Tree <- function(f, A, Y, Tmax, tol, Z = "Tout"){
   L <- inversion_rcpp3(diag(ncol(A))-A)
   Ftot <- Mult2_rcpp3(t(f),L)
 
-  return(fonct_temp(f, A, Y, Tmax, tol, Z = "Tout",L,Ftot))
+  return(fonct_temp(f, A, Y, Tmax, tol, Z ,L,Ftot))
 }
 
