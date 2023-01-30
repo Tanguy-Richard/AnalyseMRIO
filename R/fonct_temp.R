@@ -74,7 +74,6 @@ fonct_temp <- function(f, A, Y, Tmax, tol, Z = "Tout", L, Ftot){
     )
   }else{
     Tr = length(Z)
-    sector <- row.names(Y)
     if(Tr >= Tmax) {
       suite <-  list()
       for(i in sector) {
