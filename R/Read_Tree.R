@@ -59,7 +59,7 @@ Read_Tree <- function(tree){
     }
   }else{
     Node <- tree$Node
-    Z <- paste(tree$Z, collapse = " ")
+    Z <- paste(tree$Z, collapse = "~")
     Res <- data.frame(Z,Node)
     if(length(tree$Next)==0){
       return(Res)

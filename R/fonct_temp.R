@@ -9,7 +9,7 @@
 #' @param tol Valeur limite
 #' @param Z Noeud actuel
 #' @param L inverse de Leontief
-#' @param Ftot effet tottal
+#' @param Ftot effet total
 #'
 #' @return Un arbre sous la forme d'une liste de 3 éléments :
 #'  - Z vecteur étiquettant le noeud
@@ -79,7 +79,6 @@ fonct_temp <- function(f, A, Y, Tmax, tol, Z = "Tout", L, Ftot){
       for(i in sector) {
         suite[[i]] <-  NULL
       }
-      suite = suite[-1]
       tree <-  list(Z = Z,
                     Node = Contribution_Node(f, A, Y, Z),
                     Next = suite)
@@ -92,7 +91,6 @@ fonct_temp <- function(f, A, Y, Tmax, tol, Z = "Tout", L, Ftot){
           suite[[i]] = fonct_temp(f, A, Y, Tmax, tol, c(Z, i), L, Ftot)
         }
       }
-      suite = suite[-1]
       tree = list(Z = Z,
                   Node = Contribution_Node(f, A, Y, Z),
                   Next = suite)
