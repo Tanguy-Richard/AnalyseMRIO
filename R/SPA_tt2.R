@@ -14,6 +14,8 @@
 #'  - une avec la contribution
 #' @export
 #'
+#' @importFrom data.table data.table rbindlist
+#'
 #' @examples
 #' \dontrun{
 #'
@@ -61,19 +63,19 @@ SPA_tt2 <- function(f,
                     Ftot,
                     Z = "Tout") {
   sector <- row.names(Y)
-  Res <- data.frame()
+  Res <- data.table()
   if ("Tout" %in% Z) {
     for (i in sector) {
       if (Contribution_SubTree(f,A,Y,i) < tol) {
 
       } else{
-        Res <- rbind(Res, SPA_tt2(f, A, Y, Tmax, tol, L, Ftot, i ))
+        Res <- rbindlist(list(Res, SPA_tt2(f, A, Y, Tmax, tol, L, Ftot, i )))
       }
     }
   } else{
     Tr = length(Z)
     node <- paste(Z, collapse = "~")
-    Res <- data.frame(node, contribution = Contribution_Node(f,A,Y,Z))
+    Res <- data.table(node, contribution = Contribution_Node(f,A,Y,Z))
     if (Tr >= Tmax) {
 
     } else{
@@ -83,7 +85,7 @@ SPA_tt2 <- function(f,
 
         } else{
           Res <-
-            rbind(Res, SPA_tt2(f, A, Y, Tmax, tol, L, Ftot, c(Z, i) ))
+            rbindlist(list(Res, SPA_tt2(f, A, Y, Tmax, tol, L, Ftot, c(Z, i) )))
         }
       }
     }

@@ -178,7 +178,7 @@ head(test4[order(test4$contri,decreasing = TRUE),])
 
 #### 7.2 Comparaison
 
-On teste la rapidité des deux méthodes sur notre base.
+On teste la rapidité des deux méthodes sur notre base. (on teste aussi uns version intermédiaire, construisant directement le tableau en utilisant les fonctions : contribution_node / contribution_subtree)
 
 ```{r}
 library(rbenchmark)

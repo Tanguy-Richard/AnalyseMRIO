@@ -15,6 +15,8 @@
 #'  - une avec la contribution
 #' @export
 #'
+#' @importFrom data.table data.table rbindlist
+#'
 #' @examples
 #' \dontrun{
 #'
@@ -65,7 +67,7 @@ SPA_tt1 <- function(f,
                     Z = "Tout",
                     cc = 1) {
   sector <- row.names(Y)
-  Res <- data.frame()
+  Res <- data.table()
   if ("Tout" %in% Z) {
     for (i in sector) {
       node_z <- Y[i, ]
@@ -74,7 +76,7 @@ SPA_tt1 <- function(f,
       if (contrib < tol) {
 
       } else{
-        Res <- rbind(Res, SPA_tt1(f, A, Y, Tmax, tol, L, Ftot, i , node_z ))
+        Res <- rbindlist(list(Res, SPA_tt1(f, A, Y, Tmax, tol, L, Ftot, i , node_z )))
       }
     }
   } else{
@@ -82,12 +84,12 @@ SPA_tt1 <- function(f,
     if (Tr >= Tmax) {
       contri <- f[Z[length(Z)],] *  cc
       node <- paste(Z, collapse = "~")
-      Res <- data.frame(node, contri)
+      Res <- data.table(node, contri)
 
     } else{
       contri <- f[Z[length(Z)],] *  cc
       node <- paste(Z, collapse = "~")
-      Res <- data.frame(node, contri)
+      Res <- data.table(node, contri)
 
       for (i in sector) {
         cc_temp <- cc * A[i, Z[length(Z)]]
@@ -98,7 +100,7 @@ SPA_tt1 <- function(f,
 
         } else{
           Res <-
-            rbind(Res, SPA_tt1(f, A, Y, Tmax, tol, L, Ftot, c(Z, i) , cc_temp))
+            rbindlist(list(Res, SPA_tt1(f, A, Y, Tmax, tol, L, Ftot, c(Z, i) , cc_temp)))
         }
       }
     }
