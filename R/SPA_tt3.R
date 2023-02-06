@@ -1,4 +1,4 @@
-#' SPA_tt2
+#' SPA_tt3
 #'
 #' @param f vecteur des contributions par pays_secteur par unité de production
 #' @param A matrice de Leontief
@@ -8,13 +8,14 @@
 #' @param L inverse de Leontief
 #' @param Ftot effet total
 #' @param Z Noeud actuel
+#' @param cc coefficient intemédiaire
 #'
 #' @return Un data frame à 2 colonnes:
 #'  - une avec le nom du noeud
 #'  - une avec la contribution
 #' @export
 #'
-#' @importFrom data.table data.table rbindlist
+#' @importFrom data.table data.table
 #'
 #' @examples
 #' \dontrun{
@@ -43,49 +44,63 @@
 #'
 #' # On donnes un parcours
 #' Z <- c( "CHN_ENRJ")
+#' # On donne la valeur du coef associé au chemin
+#' cc <- Y[Z,]
 #'
 #' #Calcul de paramètre
 #' L <- inversion_rcpp3(diag(ncol(A))-A)
 #' Ftot <- Mult2_rcpp3(t(VA),L)
 #'
 #' # Contribution du sous arbre
-#' test <- SPA_tt2(VA,A,Y,5,0.5,L,Ftot,Z)
+#' test <- SPA_tt3(VA,A,Y,5,0.5,L,Ftot,Z, cc)
 #'
-#' test2 <- SPA_tt2(VA,A,Y,5,0.5,L,Ftot)
+#' test2 <- SPA_tt3(VA,A,Y,5,0.5,L,Ftot)
 #'
 #' }
-SPA_tt2 <- function(f,
+SPA_tt3 <- function(f,
                     A,
                     Y,
                     Tmax,
                     tol,
                     L,
                     Ftot,
-                    Z = "Tout") {
+                    Z = "Tout",
+                    cc = 1) {
   sector <- row.names(Y)
-  Res <- data.table()
+  Res <- list()
   if ("Tout" %in% Z) {
     for (i in sector) {
-      if (Contribution_SubTree(f,A,Y,i) < tol) {
+      node_z <- Y[i, ]
+      y_Z <- as.matrix(node_z * as.integer(row.names(Y) == i))
+      contrib <- Mult2_rcpp3(Ftot, y_Z)
+      if (contrib < tol) {
 
       } else{
-        Res <- rbindlist(list(Res, SPA_tt2(f, A, Y, Tmax, tol, L, Ftot, i )))
+        Res <- c(Res, SPA_tt3(f, A, Y, Tmax, tol, L, Ftot, i , node_z ))
       }
     }
   } else{
     Tr = length(Z)
-    node <- paste(Z, collapse = "~")
-    Res <- data.table(node, contribution = Contribution_Node(f,A,Y,Z))
     if (Tr >= Tmax) {
+      contri <- f[Z[length(Z)],] *  cc
+      node <- paste(Z, collapse = "~")
+      Res <- list(data.table(node, contri))
 
     } else{
+      contri <- f[Z[length(Z)],] *  cc
+      node <- paste(Z, collapse = "~")
+      Res <- list(data.table(node, contri))
 
       for (i in sector) {
-        if (Contribution_SubTree(f,A,Y,c(Z,i)) < tol) {
+        cc_temp <- cc * A[i, Z[length(Z)]]
+        y_Z <-
+          as.matrix(cc_temp * as.integer(row.names(Y) == Z[length(Z)]))
+        contrib <- Mult2_rcpp3(Ftot, y_Z)
+        if (contrib < tol) {
 
         } else{
           Res <-
-            rbindlist(list(Res, SPA_tt2(f, A, Y, Tmax, tol, L, Ftot, c(Z, i) )))
+            c(Res, SPA_tt3(f, A, Y, Tmax, tol, L, Ftot, c(Z, i) , cc_temp))
         }
       }
     }

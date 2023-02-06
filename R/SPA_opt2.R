@@ -1,20 +1,21 @@
-#' SPA_tt2
+#' SPA_opt2
+#'
+#' Construit récursivement un arbre récapitulant les effets à chaques étapes.
 #'
 #' @param f vecteur des contributions par pays_secteur par unité de production
 #' @param A matrice de Leontief
 #' @param Y Demande Finale
 #' @param Tmax Profondeur maximale autorisée
 #' @param tol Valeur limite
-#' @param L inverse de Leontief
-#' @param Ftot effet total
 #' @param Z Noeud actuel
+#' @param cc coefficient intermédiaire (cc = 1 pour Z = "Tout)
 #'
 #' @return Un data frame à 2 colonnes:
 #'  - une avec le nom du noeud
 #'  - une avec la contribution
 #' @export
 #'
-#' @importFrom data.table data.table rbindlist
+#' @importFrom data.table rbindlist
 #'
 #' @examples
 #' \dontrun{
@@ -43,52 +44,21 @@
 #'
 #' # On donnes un parcours
 #' Z <- c( "CHN_ENRJ")
-#'
-#' #Calcul de paramètre
-#' L <- inversion_rcpp3(diag(ncol(A))-A)
-#' Ftot <- Mult2_rcpp3(t(VA),L)
+#' # On donne la valeur du coef associé au chemin
+#' cc <- Y[Z,]
 #'
 #' # Contribution du sous arbre
-#' test <- SPA_tt2(VA,A,Y,5,0.5,L,Ftot,Z)
+#' test <- SPA_opt2(VA,A,Y,5,0.5,Z,cc)
+#' View(test)
 #'
-#' test2 <- SPA_tt2(VA,A,Y,5,0.5,L,Ftot)
+#' test2 <- SPA_opt2(VA,A,Y,5,0.5)
+#' View(test2)
 #'
 #' }
-SPA_tt2 <- function(f,
-                    A,
-                    Y,
-                    Tmax,
-                    tol,
-                    L,
-                    Ftot,
-                    Z = "Tout") {
-  sector <- row.names(Y)
-  Res <- data.table()
-  if ("Tout" %in% Z) {
-    for (i in sector) {
-      if (Contribution_SubTree(f,A,Y,i) < tol) {
+SPA_opt2 <- function(f, A, Y, Tmax, tol, Z = "Tout", cc = 1){
 
-      } else{
-        Res <- rbindlist(list(Res, SPA_tt2(f, A, Y, Tmax, tol, L, Ftot, i )))
-      }
-    }
-  } else{
-    Tr = length(Z)
-    node <- paste(Z, collapse = "~")
-    Res <- data.table(node, contribution = Contribution_Node(f,A,Y,Z))
-    if (Tr >= Tmax) {
+  L <- inversion_rcpp3(diag(ncol(A))-A)
+  Ftot <- Mult2_rcpp3(t(f),L)
 
-    } else{
-
-      for (i in sector) {
-        if (Contribution_SubTree(f,A,Y,c(Z,i)) < tol) {
-
-        } else{
-          Res <-
-            rbindlist(list(Res, SPA_tt2(f, A, Y, Tmax, tol, L, Ftot, c(Z, i) )))
-        }
-      }
-    }
-  }
-  return(Res)
+  return(rbindlist(SPA_tt3(f,A,Y,Tmax,tol,L,Ftot,Z,cc)))
 }

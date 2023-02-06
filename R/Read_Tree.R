@@ -7,6 +7,8 @@
 #' @return Un data frame à 2 colonne, une avec le nom du noeud et une autre avec sa contribution
 #' @export
 #'
+#' @importFrom data.table data.table rbindlist
+#'
 #' @examples
 #' \dontrun{
 #'
@@ -48,24 +50,24 @@
 #' }
 Read_Tree <- function(tree){
   if("Tout" %in% tree$Z){
-    Res <- data.frame()
+    Res <- data.table()
     if(length(tree$Next)==0){
       return(Res)
     }else{
       for(i in tree$Next){
-        Res <- rbind(Res, Read_Tree(i))
+        Res <- rbindlist(list(Res, Read_Tree(i)))
       }
       return(Res)
     }
   }else{
     Node <- tree$Node
     Z <- paste(tree$Z, collapse = "~")
-    Res <- data.frame(Z,Node)
+    Res <- data.table(Z,Node)
     if(length(tree$Next)==0){
       return(Res)
     }else{
       for(i in tree$Next){
-        Res <- rbind(Res, Read_Tree(i))
+        Res <- rbindlist(list(Res, Read_Tree(i)))
       }
       return(Res)
     }
