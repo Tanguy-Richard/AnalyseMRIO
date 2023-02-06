@@ -192,6 +192,9 @@ benchmark("Algorithme papier" = {
           "Version intermédiaire" = {
             test <- SPA_int(VA,A,Y,10,2)
           },
+          "Version mieux" = {
+            test <- SPA_opt2(VA,A,Y,10,2)
+          },
           replications = 5,
           columns = c("test", "replications", "elapsed",
                       "relative", "user.self", "sys.self"))
@@ -204,6 +207,9 @@ benchmark("Algorithme papier" = {
           },
           "Version intermédiaire" = {
             test <- SPA_int(VA,A,Y,5,0.5)
+          },
+          "Version mieux" = {
+            test <- SPA_opt2(VA,A,Y,5,0.5)
           },
           replications = 5,
           columns = c("test", "replications", "elapsed",
@@ -218,6 +224,9 @@ benchmark("Algorithme papier" = {
           "Version intermédiaire" = {
             test <- SPA_int(VA,A,Y,4,0)
           },
+          "Version mieux" = {
+            test <- SPA_opt2(VA,A,Y,4,0)
+          },
           replications = 5,
           columns = c("test", "replications", "elapsed",
                       "relative", "user.self", "sys.self"))
@@ -230,6 +239,9 @@ benchmark("Algorithme papier" = {
           },
           "Version intermédiaire" = {
             test <- SPA_int(VA,A,Y,20,1)
+          },
+          "Version mieux" = {
+            test <- SPA_opt2(VA,A,Y,20,1)
           },
           replications = 5,
           columns = c("test", "replications", "elapsed",
