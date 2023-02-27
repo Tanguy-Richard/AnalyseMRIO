@@ -82,14 +82,14 @@ SPA_tt3 <- function(f,
   } else{
     Tr = length(Z)
     if (Tr >= Tmax) {
-      contri <- f[Z[length(Z)],] *  cc
+      contribution <- f[Z[length(Z)],] *  cc
       node <- paste(Z, collapse = "~")
-      Res <- list(data.table(node, contri))
+      Res <- list(data.table(node, contribution))
 
     } else{
-      contri <- f[Z[length(Z)],] *  cc
+      contribution <- f[Z[length(Z)],] *  cc
       node <- paste(Z, collapse = "~")
-      Res <- list(data.table(node, contri))
+      Res <- list(data.table(node, contribution))
 
       for (i in sector) {
         cc_temp <- cc * A[i, Z[length(Z)]]

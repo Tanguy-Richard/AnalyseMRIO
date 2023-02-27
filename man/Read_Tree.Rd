@@ -47,11 +47,11 @@ Z <- c( "CHN_ENRJ")
 test <- Construct_Tree(VA,A,Y,5,0.5,Z)
 
 lecture <- Read_Tree(test)
-head(lecture[order(lecture$Node,decreasing = TRUE),])
+head(lecture[order(lecture$contribution,decreasing = TRUE),])
 
 
 test2 <- Construct_Tree(VA,A,Y,5,0.5)
 lecture2 <- Read_Tree(test2)
-head(lecture2[order(lecture2$Node,decreasing = TRUE),])
+head(lecture2[order(lecture2$contribution,decreasing = TRUE),])
 }
 }
