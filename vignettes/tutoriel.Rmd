@@ -1,0 +1,327 @@
+---
+title: "Tutoriel et utilisation"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Tutoriel et utilisation}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+
+# Installation
+
+L'installation du package peut se faire comme si dessous:
+
+``` r
+library(devtools)
+install_github("Tanguy-Richard/AnalyseMRIO")
+```
+
+# Exemple sur la base interne au package
+
+## 1. Mise en place
+
+On importe le package et la base présente
+
+```{r}
+library(AnalyseMRIO)
+data(BASE_ECOLE)
+```
+
+Pour afficher les caractéristiques d'une fonction du package vous pouvez passer par la commande:
+
+``` r
+help("SPA_opt")
+```
+
+
+## 2. Extraction de différentes composantes de la base
+
+On choisit l'année 1990, et on importe la liste des différentes composantes.
+
+```{r}
+#test pour l'année 1990 dans la base école
+ECOLE_1990_ALL<-CompoECOLEouA17(BASE_ECOLE,"OptFullOptionsBonus",date=1990)
+
+```
+
+On met à part les différentes composantes qui vont nous servir. On cherchera à qualifiér l'impact des différents chemins de production en terme de valeur ajoutée.
+
+```{r}
+
+#La matrice de Leontief
+A <- ECOLE_1990_ALL[["A_tab"]][,-1] # On enlève la colonne année
+A <- MatCol(A,"Lig_Country","Lig_Indus")
+
+#La demande finale Y
+Y <- ECOLE_1990_ALL[["DF_TOT"]]
+Y <- Y[,-c(1,2)] # prendre uniquement la colonne d'interet
+Y <- MatCol(Y,"Lig_Country","Lig_Indus")
+
+#Le vecteur des impacts (ici en valeur ajoutée) par pays/secteur et unité de production
+## valeur ajoutée par pays/secteur
+VA <- ECOLE_1990_ALL[["VA"]]
+VA <- VA[,-c(1,2)] # prendre uniquement la colonne d'interet
+VA <- MatCol(VA,"Col_Country","Col_Indus")
+
+## unités de production par pays/secteur
+P <- ECOLE_1990_ALL[["PROD"]]
+P <- P [,-c(1,2)]
+P <- MatCol(P,"Lig_Country","Lig_Indus")
+
+## vecteur des impacts (valeur ajouté par unité de production)
+VA <- VA/P
+```
+
+## 3. Contribution d'un noeud
+
+On se donne un noeud (chaine de secteurs), sous la forme d'un vecteur de chaîne de caractères.
+
+```{r}
+# On donne un parcours pour la base ECOLE
+Z <- c( "CHN_ENRJ", "CHN_AGR_INDU", "UE_OTHERS_AGR_INDU")
+```
+
+L'impact en valeur ajoutée du noeud est donné par :
+
+```{r}
+Contribution_Node(VA,A,Y,Z)
+```
+
+## 4. Contribution d'un sous arbre
+
+La contribution d'un sous arbre d'un noeud Z est l'impact de l'ensemble des productions intermédiaires antérieures servant à la production de ce noeud.
+En conservant le même noeud, on la calcule :
+
+```{r}
+Contribution_SubTree(VA,A,Y,Z)
+```
+
+## 5. Construction d'un arbre
+
+On va maintenant construire un arbre à partir d'un noeud. On stocke l'ensemble des chemins et de leur impact sous la forme de listes imbriquées, donnant le nom du noeud, la valeur de l'impact et une liste des noeuds suivants (stockés sous la même forme).
+
+Pour s'arreter on fixe une profondeur maximale à 5 et une tolérance à 0.5 (c'est à dire que si la contribution d'un sous arbre issue d'un noeud est inférieur à 0.5, on ne l'explore pas)
+
+Si on veut partir d'un noeud fixé, on utilise par exemple:
+
+```{r}
+test <- Construct_Tree(VA,A,Y,5,0.5,Z)
+
+```
+
+Si on veut l'ensemble des chemins on utilise:
+
+```{r}
+test2 <- Construct_Tree(VA,A,Y,5,0.5)
+```
+
+## 6. Lecture de l'arbre
+
+Pour utiliser un arbre on doit le lire. La fonction "Read_Tree" permet de lire un arbre et de rendre un tableau recensant les noeuds et leurs impacts.
+Avec les arbres précédents on obtient:
+
+
+```{r}
+lecture <- Read_Tree(test)
+# nombre de noeuds dans le tableau :
+length(lecture$Node)
+# Noeuds les plus importants :
+head(lecture[order(lecture$Node,decreasing = TRUE),])
+```
+
+```{r}
+lecture2 <- Read_Tree(test2)
+# nombre de noeuds dans le tableau :
+length(lecture2$Node)
+# Noeuds les plus importants :
+head(lecture2[order(lecture2$Node,decreasing = TRUE),])
+```
+
+## 7. Une fonction tout en 1 plus rapide ?
+
+### 7.1 Utilisation
+
+La fonction "SPA_opt" permet une compilation directe du tableau sans passé par la réalisation d'un arbre. Sa structure permet d'avoir moins d'opération.
+
+Si on veut l'utiliser avec un noeud fixé on doit aussi calculé la valeur du chemin pour y arriver. C'est à dire le produit de la demande finale du secteur et des différents coefficients techniques.
+
+```{r}
+# On donnes un parcours
+Z <- c( "CHN_ENRJ")
+# On donne la valeur du coef associé au chemin
+cc <- Y[Z,] # Ici de profondeur 1 donc cela correspond juste à la demande finale
+
+# Contribution du sous arbre
+test3 <- SPA_opt(VA,A,Y,5,0.5,Z,cc)
+head(test3[order(test3$contri,decreasing = TRUE),])
+```
+
+Pour avoir tout les noeuds on utilise :
+
+```{r}
+test4 <- SPA_opt(VA,A,Y,5,0.5)
+head(test4[order(test4$contri,decreasing = TRUE),])
+```
+
+### 7.2 Comparaison
+
+On teste la rapidité des deux méthodes sur notre base. (on teste aussi uns version intermédiaire, construisant directement le tableau en utilisant les fonctions : contribution_node / contribution_subtree)
+
+```{r, eval = FALSE}
+library(rbenchmark)
+benchmark("Algorithme papier" = {
+            test <- Construct_Tree(VA,A,Y,10,2)
+            lecture <- Read_Tree(test2)
+          },
+          "Version comprimée" = {
+            test <- SPA_opt(VA,A,Y,10,2)
+          },
+          "Version intermédiaire" = {
+            test <- SPA_int(VA,A,Y,10,2)
+          },
+          "Version mieux" = {
+            test <- SPA_opt2(VA,A,Y,10,2)
+          },
+          replications = 5,
+          columns = c("test", "replications", "elapsed",
+                      "relative", "user.self", "sys.self"))
+benchmark("Algorithme papier" = {
+            test <- Construct_Tree(VA,A,Y,5,0.5)
+            lecture <- Read_Tree(test2)
+          },
+          "Version comprimée" = {
+            test <- SPA_opt(VA,A,Y,5,0.5)
+          },
+          "Version intermédiaire" = {
+            test <- SPA_int(VA,A,Y,5,0.5)
+          },
+          "Version mieux" = {
+            test <- SPA_opt2(VA,A,Y,5,0.5)
+          },
+          replications = 5,
+          columns = c("test", "replications", "elapsed",
+                      "relative", "user.self", "sys.self"))
+benchmark("Algorithme papier" = {
+            test <- Construct_Tree(VA,A,Y,4,0)
+            lecture <- Read_Tree(test2)
+          },
+          "Version comprimée" = {
+            test <- SPA_opt(VA,A,Y,4,0)
+          },
+          "Version intermédiaire" = {
+            test <- SPA_int(VA,A,Y,4,0)
+          },
+          "Version mieux" = {
+            test <- SPA_opt2(VA,A,Y,4,0)
+          },
+          replications = 5,
+          columns = c("test", "replications", "elapsed",
+                      "relative", "user.self", "sys.self"))
+benchmark("Algorithme papier" = {
+            test <- Construct_Tree(VA,A,Y,20,1)
+            lecture <- Read_Tree(test2)
+          },
+          "Version comprimée" = {
+            test <- SPA_opt(VA,A,Y,20,1)
+          },
+          "Version intermédiaire" = {
+            test <- SPA_int(VA,A,Y,20,1)
+          },
+          "Version mieux" = {
+            test <- SPA_opt2(VA,A,Y,20,1)
+          },
+          replications = 5,
+          columns = c("test", "replications", "elapsed",
+                      "relative", "user.self", "sys.self"))
+
+
+
+
+```
+
+Les méthodes sont comparable en temps => il faudrait voir sur plusieurs replications (en gros cela varie celon les essais). Dans l'idée, R a du mal avec la mémoire, donc si trop de noeud la version comprimé (un argument supplémentaire) a du mal. Mais si arbre profond elle va plus vite (plus efficace pour Tmax grand et tol grand)
+
+## 8. Utilisation de nos données en analyse
+
+On charge le résultat de l'analyse de la construction des chemins pour la BASE_ECOLE entre les années 1990 et 2000 (paramètrisation : Tmax = 10 / tol = 2 ).
+
+```{r}
+
+data("SPA_ECOLE")
+
+```
+
+### 8.1 Visualisation d'évolution l'impact sur une économie
+
+On s'interesse à l'impacte de différents secteurs ou pays dans la production française d'un pays. C'est à dire la somme de la contribution de touts les chemins dont le bout production finale est en France et le bout consomation intermédiaire est le secteur concerné.
+On peut visualiser de différentes façons l'évolution de ces impacts : par pays (en les fournissant) ou secteurs, en choisissant de regarder en valeur brute ou en proportion par an (pour éviter l'impacte de la croissance).
+
+```{r, eval=FALSE}
+
+g1 <- courbes_consos(SPA_ECOLE,"FRA", by = "pays", listepays = c("FRA","CHN","ROW","UE_OTHERS","USA"))
+g2 <- courbes_consos(SPA_ECOLE,"FRA", by = "pays", listepays = c("FRA","CHN","ROW","UE_OTHERS","USA"),prop = FALSE)
+g3 <- courbes_consos(SPA_ECOLE,"FRA", by = "secteurs")
+g4 <- courbes_consos(SPA_ECOLE,"FRA", by = "secteurs",prop = FALSE)
+
+library(cowplot)
+plot_grid(g1,g2,g3,g4, nrow = 2 ,ncol = 2)
+
+```
+
+On observe une impressionnante inversion en 2000 pour certain secteur. Cela correspond à un changement de nomenclature dans les bases agrégées pour former la base BASE_ECOLE. Il faut par conséquent faire attention lorsqu'on analyse l'évolution des chemins entre la période 1990-1999 et celle 2000-2020.
+
+
+### 8.2 Graphique de Sankey
+
+Pour une année donnée on peut analyser les parcours entres secteurs. On peut pourcela utiliser un graphique de Sankey. On va pour cela s'interesser à tout les chemins d'une longueur donnée (3 ou 4) et voir les flux entre secteur (soit en pondérant par le nombre de chemin utilisant une connection entre 2 secteurs, soit on pondérant par l'impact total).
+
+Pour cela on doit en préalable fournir un ensemble de noeuds intermédiaires à observer. On utilise pour cela la fonction *meilleur_chemin*. Par exemple pour l'année 1990, on utilise pour les chemins de longueur 2:
+
+```{r}
+
+chem1 <- meilleur_chemin(SPA_ECOLE$don2020, lon = 4)
+
+```
+
+On peut ensuite afficher le graphique de Sankey correspondant en fournissant une liste de noeuds de départ et une de fin. en se concentrant sur les chemins participants à la production finale française, on obtient.
+
+```{r}
+# liste pour la production finale
+secteur_deb <- c("FRA_AGR_INDU","FRA_ENRJ","FRA_SERV_ABRIT","FRA_SERV_EXPO")
+
+# liste pour les noeuds d'intérêt en bout de chemin
+secteur_fin <- c("CHN_AGR_INDU","CHN_ENRJ" ,"CHN_SERV_ABRIT","CHN_SERV_EXPO",
+                  "FRA_AGR_INDU","FRA_ENRJ","FRA_SERV_ABRIT","FRA_SERV_EXPO",
+                  "ROW_AGR_INDU","ROW_ENRJ","ROW_SERV_ABRIT","ROW_SERV_EXPO",
+                  "UE_OTHERS_AGR_INDU","UE_OTHERS_ENRJ","UE_OTHERS_SERV_ABRIT","UE_OTHERS_SERV_EXPO",
+                  "USA_AGR_INDU","USA_ENRJ", "USA_SERV_ABRIT","USA_SERV_EXPO")
+
+# graphique
+graph_sankey(SPA_ECOLE$don1990,
+             chem1,
+             secteur_deb,
+             secteur_fin)
+```
+
+
+### 8.3 Evolution brute du rang
+
+La fonction suivante permet simplement d'avoir le rang d'un chemin (en terme de contribution) pour plusieurs années.
+
+```{r}
+# Récupération du rang
+evo <- Variation("FRA_AGR_INDU",SPA_ECOLE)
+# représentation de l'évolution
+plot(x= 1990:2020, y=evo["valeur",] , col = "red", 
+     typ = "l",ylim = c(100,1),xlab = "Année", ylab = "Rang")
+
+```
+

@@ -10,6 +10,8 @@ utils::globalVariables(
     'value',
     'i.value',
     '..C1',
-    '..C2'
+    '..C2',
+    'contribution',
+    'secteur'
   )
 )

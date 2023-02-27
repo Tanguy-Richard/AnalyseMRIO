@@ -11,16 +11,23 @@ RoxygenNote: 7.2.3
 Suggests: 
     knitr,
     rmarkdown,
-    rbenchmark
+    rbenchmark,
+    cowplot
 VignetteBuilder: knitr
 Imports: 
     Rcpp,
     dplyr,
     data.table,
-    RcppArmadillo
+    RcppArmadillo,
+    ggplot2,
+    cli,
+    tidyr,
+    stringr,
+    networkD3
 LinkingTo: 
     Rcpp, RcppArmadillo
 Language: fr
 Depends: 
-    R (>= 2.10)
+    R (>= 3.5.0)
 LazyData: true
+LazyDataCompression:xz

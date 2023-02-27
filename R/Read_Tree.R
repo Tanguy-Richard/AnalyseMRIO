@@ -41,12 +41,12 @@
 #' test <- Construct_Tree(VA,A,Y,5,0.5,Z)
 #'
 #' lecture <- Read_Tree(test)
-#' head(lecture[order(lecture$Node,decreasing = TRUE),])
+#' head(lecture[order(lecture$contribution,decreasing = TRUE),])
 #'
 #'
 #' test2 <- Construct_Tree(VA,A,Y,5,0.5)
 #' lecture2 <- Read_Tree(test2)
-#' head(lecture2[order(lecture2$Node,decreasing = TRUE),])
+#' head(lecture2[order(lecture2$contribution,decreasing = TRUE),])
 #' }
 Read_Tree <- function(tree){
   if("Tout" %in% tree$Z){
@@ -60,9 +60,9 @@ Read_Tree <- function(tree){
       return(Res)
     }
   }else{
-    Node <- tree$Node
-    Z <- paste(tree$Z, collapse = "~")
-    Res <- data.table(Z,Node)
+    contribution <- tree$Node
+    node <- paste(tree$Z, collapse = "~")
+    Res <- data.table(node,contribution)
     if(length(tree$Next)==0){
       return(Res)
     }else{
