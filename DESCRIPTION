@@ -12,7 +12,10 @@ Suggests:
     knitr,
     rmarkdown,
     rbenchmark,
-    cowplot
+    cowplot,
+    FactoMineR,
+    factoextra,
+    wesanderson
 VignetteBuilder: knitr
 Imports: 
     Rcpp,

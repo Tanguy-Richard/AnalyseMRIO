@@ -15,7 +15,7 @@ Evolution(SPA, num)
 un data frame de l'évolution des rangs
 }
 \description{
-Evolution
+Permet d'extraire l'évolution des rangs des \emph{n} chemins les plus important la première année
 }
 \examples{
 \dontrun{
