@@ -190,6 +190,9 @@ benchmark("Algorithme papier" = {
           "Version mieux" = {
             test <- SPA_opt2(VA,A,Y,10,2)
           },
+          "Version iterative" = {
+            test <- SPA_iter(VA,A,Y,10,2)
+          },
           replications = 5,
           columns = c("test", "replications", "elapsed",
                       "relative", "user.self", "sys.self"))
@@ -205,6 +208,9 @@ benchmark("Algorithme papier" = {
           },
           "Version mieux" = {
             test <- SPA_opt2(VA,A,Y,5,0.5)
+          },
+          "Version iterative" = {
+            test <- SPA_iter(VA,A,Y,5,0.5)
           },
           replications = 5,
           columns = c("test", "replications", "elapsed",
@@ -222,21 +228,27 @@ benchmark("Algorithme papier" = {
           "Version mieux" = {
             test <- SPA_opt2(VA,A,Y,4,0)
           },
+          "Version iterative" = {
+            test <- SPA_iter(VA,A,Y,4,0)
+          },
           replications = 5,
           columns = c("test", "replications", "elapsed",
                       "relative", "user.self", "sys.self"))
 benchmark("Algorithme papier" = {
-            test <- Construct_Tree(VA,A,Y,20,1)
+            test <- Construct_Tree(VA,A,Y,20,4)
             lecture <- Read_Tree(test2)
           },
           "Version comprimée" = {
-            test <- SPA_opt(VA,A,Y,20,1)
+            test <- SPA_opt(VA,A,Y,20,4)
           },
           "Version intermédiaire" = {
-            test <- SPA_int(VA,A,Y,20,1)
+            test <- SPA_int(VA,A,Y,20,4)
           },
           "Version mieux" = {
-            test <- SPA_opt2(VA,A,Y,20,1)
+            test <- SPA_opt2(VA,A,Y,20,4)
+          },
+          "Version iterative" = {
+            test <- SPA_iter(VA,A,Y,20,4)
           },
           replications = 5,
           columns = c("test", "replications", "elapsed",
@@ -247,7 +259,11 @@ benchmark("Algorithme papier" = {
 
 ```
 
-Les méthodes sont comparable en temps => il faudrait voir sur plusieurs replications (en gros cela varie celon les essais). Dans l'idée, R a du mal avec la mémoire, donc si trop de noeud la version comprimé (un argument supplémentaire) a du mal. Mais si arbre profond elle va plus vite (plus efficace pour Tmax grand et tol grand)
+Les méthodes sont comparable en temps. Toutefois, la méthode itérative semble avoir plus de mal. 
+La methode de l'algorithme initial semble avoir plus de facilité sur des arbre peu profond (Tmaw faible) et des tolérances faibles. La méthode comprimée améliorée *spa_opt2* est elle plus effciace sur les arbres plus longs. 
+
+Nous conseillons donc l'utilisation d'une méthode ou l'autre selon les paramêtres de préférences de la SPA.
+
 
 ## 8. Utilisation de nos données en analyse
 
@@ -322,6 +338,179 @@ evo <- Variation("FRA_AGR_INDU",SPA_ECOLE)
 # représentation de l'évolution
 plot(x= 1990:2020, y=evo["valeur",] , col = "red", 
      typ = "l",ylim = c(100,1),xlab = "Année", ylab = "Rang")
+
+```
+
+La fonction *Evolution* permet de récupérer l'évolution du rang pour les n chemins avec la plus grande contribution pour la première année.
+
+```{r}
+
+Evolution(SPA_ECOLE,100)
+
+```
+
+### 8.4 Indice de centralité
+
+la fonction *centralite* permet pour un pays/secteur donné et un tableau issue d'une SPA d'avoir un indice de centralité associé
+```{r}
+# Pour dénombrer le nombre de chemin passant par le noeud en intermédiaire
+centralite(SPA_ECOLE$don1990, "CHN_AGR_INDU")
+
+# Pour comptabiliser la valeur totale des chemin passant par le noeud en intermédiaire
+centralite(SPA_ECOLE$don1990, "CHN_AGR_INDU", by="value")
+```
+
+La fonction *centralite_annee* permet de récupèrer un tableau de d'indice de betweenness (compte ou valeur total) pour toute les noeuds pays/secteur sur les données d'une SPA issue d'une année précise
+
+```{r}
+# Pour dénombrer le nombre de chemin passant par le noeud en intermédiaire
+centralite_annee(SPA_ECOLE$don1990)
+
+# Pour comptabiliser la valeur totale des chemin passant par le noeud en intermédiaire
+centralite_annee(SPA_ECOLE$don1990, by = "value")
+```
+
+La fonction *centralite_totale* permet de récupérer directement les indices pour plusieurs années fournies dans une liste de SPA.
+```{r, eval = FALSE}
+# Pour dénombrer le nombre de chemin passant par le noeud en intermédiaire
+centralite_totale(SPA_ECOLE)
+
+# Pour comptabiliser la valeur totale des chemin passant par le noeud en intermédiaire
+centralite_totale(SPA_ECOLE, by = "value")
+```
+
+
+On va utiliser ces outils pour conduire une analyse factoriel multiple. On commence partraiter nos données.
+
+```{r, message=FALSE}
+
+# Import de libraries
+library(FactoMineR)
+library(factoextra)
+library(stringr)
+library(wesanderson)
+# Gestion des options d'affichage
+options(ggrepel.max.overlaps = Inf)
+
+# Calcul de valeur de coefficent de centralité
+toute_centre_v <- centralite_totale(SPA_ECOLE, by = "value")
+
+# Selection des années après la crise de 2008
+dontemp2 <- toute_centre_v[,c(1,22:32)]
+
+# Standardisation des valeur par année
+for(i in 22:32){
+  dontemp2[,i-20] <- toute_centre_v[,i]/sum(SPA_ECOLE[[i-1]]$contribution)
+}
+
+# Séparation des pays et secteurs en 2 colonnes différentes
+secteurs = dontemp2$secteur
+listepays = c("CHN","FRA","USA","UE_OTHERS","ROW")
+pays = c()
+secteur = c()
+for(i in secteurs){
+  for(pp in listepays){
+    if(startsWith(i, pp)){
+      pays = c(pays,pp)
+      n1 = nchar(pp)
+      n2 = nchar(i)
+      secteur = c(secteur,str_sub(i, n1+1, n2))
+    }
+  }
+}
+dontemp2$secteur <- secteur
+dontemp2$pays <- pays
+
+
+# Récupération des secteurs
+sector <- dontemp2$secteur
+sector <- sector[!duplicated(sector)]
+# Récupération des pays (non nécessaire on a déjà cela dans "listepays")
+country <- dontemp2$pays
+country <- country[!duplicated(country)]
+
+# Reformation des tables en " pays x secteurs " par année
+PP=list()
+for(i in 2:(length(dontemp2)-1)){
+  res = NULL # pour stocker les données
+  data <- dontemp2[,i]
+# On parcourt les secteurs puis les pays pour extraire les données
+  for(s in sector){
+    sect_temp <- c()
+    for(p in country){
+      n1 <- which(dontemp2$secteur == s)
+      n2 <- which(dontemp2$pays == p)
+      ind <- intersect(n1,n2)
+      sect_temp <- c(sect_temp,data[ind])
+    }
+    temp <- data.frame(sect_temp)
+    if(is.null(res)){
+      res <- temp
+    }else{
+      res <- cbind(res,temp)
+    }
+  }
+  colnames(res) <- sector
+  row.names(res) <- country
+  PP <- c(PP,list(res))
+}
+
+# Reformation des tableaux années par années en un tableau
+TOUT <- PP[1]
+ind=1
+for(i in PP[2:11]){
+  ind=ind+1
+  colnames(i) <- paste(colnames(i),ind,sep="")
+  TOUT <- cbind(TOUT,i)
+}
+```
+On peut à partir de nos données fair eun eACP pour une année donnée.
+
+```{r}
+acp2010 <- PCA(PP[1])
+plot(acp2010,choix = "var")
+```
+
+On conduit l'analyse factoriel. On affiche ci-dessous les valeurs propres associées aux dimensions.
+
+```{r}
+mfa.post <- MFA(TOUT,
+                group = rep(4,11),
+                type = rep("s",11),
+                name.group = paste("an",2010:2020,sep=""))
+  
+fviz_screeplot(mfa.post)
+```
+
+Ci-dessous une représentation des individus (pays)
+
+```{r}
+fviz_mfa_ind(mfa.post, 
+             palette = "jco",
+             addEllipses = FALSE, 
+             repel = TRUE
+)   
+```
+On représente les variables (groupées en couleur par année).
+
+```{r}
+pal <- wes_palette("Zissou1", 11, type = "continuous")
+fviz_mfa_var(mfa.post, 
+             palette = pal,
+             addEllipses = FALSE, 
+             repel = TRUE
+) 
+
+
+```
+
+On peut regarder par exemple la participation de chaque individu à la première dimension. 
+
+```{r}
+
+fviz_contrib(mfa.post, 
+             choice = "ind", 
+             axes = 1)
 
 ```
 

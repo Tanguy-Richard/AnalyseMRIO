@@ -1,5 +1,7 @@
 #' Evolution
 #'
+#' Permet d'extraire l'évolution des rangs des *n* chemins les plus important la première année
+#'
 #' @param SPA liste de data.table issue de SPA_opt2
 #' @param num nombre de chemins à conserver
 #'

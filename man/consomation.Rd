@@ -28,10 +28,10 @@ data(SPA_ECOLE)
 
 don1990 <- SPA_ECOLE$don1990
 
-tt <- consomation("FRA",don1990)
+tt <- consomation(don1990,"FRA")
 View(tt)
 
-tt2 <- consomation("FRA",don1990, by = "pays", listepays = c("FRA","CHN","ROW","UE_OTHERS","USA"))
+tt2 <- consomation(don1990,"FRA", by = "pays", listepays = c("FRA","CHN","ROW","UE_OTHERS","USA"))
 View(tt2)
 
 }
